@@ -17,6 +17,7 @@ import {
   Database,
   Gauge,
   Layers3,
+  Radar,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -29,7 +30,7 @@ import {
 } from "lucide-react";
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AiExplanation, Candle, MarketAnalysis, MarketType } from "../lib/market-types";
+import type { AiExplanation, Candle, MarketAnalysis, MarketType, WatchlistResponse } from "../lib/market-types";
 
 const COIN_OPTIONS = [
   { symbol: "BTCUSDT", ticker: "BTC", name: "Bitcoin" },
@@ -224,11 +225,15 @@ export function MarketTerminal() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [market, setMarket] = useState<MarketType>("futures");
   const [analysis, setAnalysis] = useState<MarketAnalysis | null>(null);
+  const [watchlist, setWatchlist] = useState<WatchlistResponse | null>(null);
   const [ai, setAi] = useState<AiExplanation | null>(null);
   const [loading, setLoading] = useState(true);
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [watchlistKey, setWatchlistKey] = useState(0);
+  const [watchlistLoading, setWatchlistLoading] = useState(true);
+  const [watchlistError, setWatchlistError] = useState<string | null>(null);
   const searchRef = useRef<HTMLFormElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -283,6 +288,30 @@ export function MarketTerminal() {
     explain();
     return () => controller.abort();
   }, [analysis]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const loadWatchlist = async () => {
+      setWatchlistLoading(true);
+      setWatchlistError(null);
+      try {
+        const response = await fetch(`/api/watchlist?market=${market}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = await response.json() as WatchlistResponse & { error?: string };
+        if (!response.ok) throw new Error(payload.error || "Không thể quét danh sách coin.");
+        setWatchlist(payload);
+      } catch (requestError) {
+        if (requestError instanceof DOMException && requestError.name === "AbortError") return;
+        setWatchlistError(requestError instanceof Error ? requestError.message : "Không thể quét danh sách coin.");
+      } finally {
+        setWatchlistLoading(false);
+      }
+    };
+    loadWatchlist();
+    return () => controller.abort();
+  }, [market, watchlistKey]);
 
   useEffect(() => {
     const closeSearch = (event: PointerEvent) => {
@@ -463,6 +492,59 @@ export function MarketTerminal() {
 
       {analysis ? (
         <div className={loading ? "terminal-grid refreshing" : "terminal-grid"}>
+          <section className="watchlist-panel panel">
+            <div className="panel-header watchlist-header">
+              <div className="watchlist-title">
+                <span className="watchlist-icon"><Radar size={17} /></span>
+                <div><span className="eyebrow">MARKET SCANNER</span><h2>Coin cần theo dõi</h2></div>
+              </div>
+              <div className="watchlist-actions">
+                {watchlist ? <span>{watchlist.scanned} cặp · {formatTime(watchlist.generatedAt)}</span> : null}
+                <button
+                  type="button"
+                  aria-label="Quét lại danh sách coin"
+                  onClick={() => setWatchlistKey((key) => key + 1)}
+                  disabled={watchlistLoading}
+                >
+                  <RefreshCw size={14} className={watchlistLoading ? "spinning" : ""} />
+                </button>
+              </div>
+            </div>
+            {watchlistError && !watchlist ? (
+              <div className="watchlist-error"><AlertTriangle size={15} /><span>{watchlistError}</span><button onClick={() => setWatchlistKey((key) => key + 1)}>Thử lại</button></div>
+            ) : (
+              <div className={watchlistLoading ? "watchlist-cards loading" : "watchlist-cards"}>
+                {watchlist ? watchlist.items.slice(0, 6).map((item, index) => {
+                  const itemClass = item.signal === "LONG" ? "positive" : item.signal === "SHORT" ? "negative" : "neutral";
+                  return (
+                    <button
+                      type="button"
+                      className={`watch-card ${itemClass} ${symbol === item.symbol ? "active" : ""}`}
+                      key={item.symbol}
+                      onClick={() => selectSymbol(item.symbol)}
+                      aria-label={`Phân tích ${item.ticker}, điểm theo dõi ${item.score}`}
+                    >
+                      <span className="watch-rank">#{index + 1}</span>
+                      <span className={`watch-signal ${itemClass}`}>
+                        {item.signal === "LONG" ? <TrendingUp size={12} /> : item.signal === "SHORT" ? <TrendingDown size={12} /> : <Gauge size={12} />}
+                        {item.signal}
+                      </span>
+                      <span className="watch-coin"><i>{item.ticker.slice(0, 1)}</i><b>{item.ticker}<small>/USDT</small></b></span>
+                      <span className="watch-score"><strong>{item.score}</strong><small>điểm</small></span>
+                      <span className="watch-price">{formatPrice(item.price)}<em className={item.change24h >= 0 ? "positive-text" : "negative-text"}>{item.change24h >= 0 ? "+" : ""}{item.change24h}%</em></span>
+                      <span className="watch-reason">{item.reasons[0]}</span>
+                      <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
+                    </button>
+                  );
+                }) : Array.from({ length: 6 }, (_, index) => <div className="watch-card-skeleton" key={index} />)}
+              </div>
+            )}
+            <div className="watchlist-foot">
+              <span><CircleDot size={11} /> {watchlist?.methodology || "Đang tổng hợp xu hướng, động lượng và thanh khoản từ Binance."}</span>
+              {watchlistError && watchlist ? <em><AlertTriangle size={11} /> Dữ liệu cũ đang được giữ lại</em> : null}
+            </div>
+          </section>
+
           <section className="market-hero panel">
             <div className="hero-identity">
               <div className="asset-icon">{analysis.symbol.slice(0, 1)}</div>

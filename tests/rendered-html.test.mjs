@@ -27,8 +27,9 @@ test("server-renders the PatternDesk application shell", async () => {
 });
 
 test("keeps market logic deterministic and Gemini server-only", async () => {
-  const [marketRoute, analyzer, explainRoute, terminal, packageJson] = await Promise.all([
+  const [marketRoute, watchlistRoute, analyzer, explainRoute, terminal, packageJson] = await Promise.all([
     readFile(new URL("../app/api/market/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/watchlist/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analyze-market.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/explain/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/terminal.tsx", import.meta.url), "utf8"),
@@ -36,6 +37,8 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   ]);
 
   assert.match(marketRoute, /fetchKlines\(market, symbol, "15m", 5000\)/);
+  assert.match(watchlistRoute, /WATCH_SYMBOLS/);
+  assert.match(watchlistRoute, /trend15m \* 0\.36/);
   assert.match(analyzer, /patternWindow = 30/);
   assert.match(analyzer, /forwardBars = 12/);
   assert.match(explainRoute, /process\.env\.GEMINI_API_KEY/);

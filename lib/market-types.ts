@@ -104,3 +104,27 @@ export type AiExplanation = {
   invalidation: string;
   caution: string;
 };
+
+export type WatchlistItem = {
+  symbol: string;
+  ticker: string;
+  price: number;
+  change24h: number;
+  quoteVolume24h: number;
+  score: number;
+  signal: Signal;
+  rsi15m: number;
+  rsi1h: number;
+  atrPercent: number;
+  volumeRatio: number;
+  fundingRate: number | null;
+  reasons: string[];
+};
+
+export type WatchlistResponse = {
+  market: MarketType;
+  generatedAt: number;
+  scanned: number;
+  items: WatchlistItem[];
+  methodology: string;
+};
