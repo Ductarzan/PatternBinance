@@ -43,6 +43,9 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   assert.match(analyzer, /forwardBars = 12/);
   assert.match(explainRoute, /process\.env\.GEMINI_API_KEY/);
   assert.match(explainRoute, /không sửa, suy đoán hoặc tạo thêm giá/);
+  assert.doesNotMatch(explainRoute, /additionalProperties/);
+  assert.match(terminal, /setAiError\(payload\.error/);
+  assert.match(terminal, /Gemini lỗi/);
   assert.match(terminal, /aria-label="Chọn coin nhanh"/);
   assert.match(terminal, /onClick=\{\(\) => selectSymbol\(coin\.symbol\)\}/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);

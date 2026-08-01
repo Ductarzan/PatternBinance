@@ -11,7 +11,6 @@ const OUTPUT_SCHEMA = {
     caution: { type: "string" },
   },
   required: ["title", "narrative", "keyDrivers", "invalidation", "caution"],
-  additionalProperties: false,
 };
 
 function compactAnalysis(analysis: MarketAnalysis) {

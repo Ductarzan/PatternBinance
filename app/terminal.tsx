@@ -227,6 +227,7 @@ export function MarketTerminal() {
   const [analysis, setAnalysis] = useState<MarketAnalysis | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistResponse | null>(null);
   const [ai, setAi] = useState<AiExplanation | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -241,6 +242,7 @@ export function MarketTerminal() {
     setLoading(true);
     setError(null);
     setAi(null);
+    setAiError(null);
     try {
       const response = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&market=${market}`, {
         cache: "no-store",
@@ -269,6 +271,8 @@ export function MarketTerminal() {
     const controller = new AbortController();
     const explain = async () => {
       setAiLoading(true);
+      setAi(null);
+      setAiError(null);
       try {
         const response = await fetch("/api/explain", {
           method: "POST",
@@ -277,10 +281,14 @@ export function MarketTerminal() {
           signal: controller.signal,
         });
         const payload = await response.json() as AiExplanation & { error?: string };
-        if (response.ok) setAi(payload as AiExplanation);
-        else if (payload.configured === false) setAi(null);
-      } catch {
-        // The deterministic explanation remains visible when Gemini is unavailable.
+        if (response.ok) {
+          setAi(payload as AiExplanation);
+          return;
+        }
+        setAiError(payload.error || "Gemini không thể diễn giải tín hiệu lúc này.");
+      } catch (requestError) {
+        if (requestError instanceof DOMException && requestError.name === "AbortError") return;
+        setAiError(requestError instanceof Error ? requestError.message : "Không thể kết nối Gemini.");
       } finally {
         setAiLoading(false);
       }
@@ -640,8 +648,9 @@ export function MarketTerminal() {
           <section className="ai-panel panel">
             <div className="panel-header">
               <div className="ai-title"><span className="ai-icon"><BrainCircuit size={18} /></span><div><span className="eyebrow">GEMINI INTERPRETER</span><h2>Diễn giải tín hiệu</h2></div></div>
-              <span className={ai ? "ai-status online" : "ai-status"}><Sparkles size={12} /> {aiLoading ? "Đang diễn giải" : ai ? "Gemini online" : "Logic hệ thống"}</span>
+              <span className={ai ? "ai-status online" : aiError ? "ai-status error" : "ai-status"}><Sparkles size={12} /> {aiLoading ? "Đang diễn giải" : ai ? "Gemini online" : aiError ? "Gemini lỗi" : "Logic hệ thống"}</span>
             </div>
+            {aiError ? <div className="ai-error"><AlertTriangle size={14} /><span><b>Không thể dùng Gemini</b>{aiError}</span></div> : null}
             {explanation ? (
               <div className="ai-content">
                 <h3>{explanation.title}</h3>
