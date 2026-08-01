@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { analyzeMarket } from "../../../lib/analyze-market";
 import type { Candle, MarketType } from "../../../lib/market-types";
 
-const VALID_SYMBOL = /^[A-Z0-9]{5,20}$/;
+const VALID_SYMBOL = /^[\p{L}\p{N}]{5,40}$/u;
 const FUTURES_BASE = "https://fapi.binance.com";
 const SPOT_BASE = "https://data-api.binance.vision";
 

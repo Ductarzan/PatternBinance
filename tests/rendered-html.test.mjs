@@ -27,14 +27,16 @@ test("server-renders the PatternDesk application shell", async () => {
 });
 
 test("keeps market logic deterministic and Gemini server-only", async () => {
-  const [marketRoute, watchlistRoute, analyzer, explainRoute, terminal, packageJson] = await Promise.all([
+  const [marketRoute, watchlistRoute, analyzer, explainRoute, terminal, packageJson, catalogText] = await Promise.all([
     readFile(new URL("../app/api/market/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/watchlist/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analyze-market.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/explain/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/terminal.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../lib/binance-usdt-symbols.json", import.meta.url), "utf8"),
   ]);
+  const catalog = JSON.parse(catalogText);
 
   assert.match(marketRoute, /fetchKlines\(market, symbol, "15m", 5000\)/);
   assert.match(watchlistRoute, /WATCH_SYMBOLS/);
@@ -48,6 +50,11 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   assert.match(terminal, /Gemini lỗi/);
   assert.match(terminal, /aria-label="Chọn coin nhanh"/);
   assert.match(terminal, /onClick=\{\(\) => selectSymbol\(coin\.symbol\)\}/);
+  assert.match(terminal, /COIN_OPTIONS\[market\]/);
+  assert.ok(catalog.futures.length > 500);
+  assert.ok(catalog.spot.length > 450);
+  assert.ok(catalog.futures.includes("SOLUSDT"));
+  assert.ok(catalog.spot.includes("SOLUSDT"));
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview", root)));
 });

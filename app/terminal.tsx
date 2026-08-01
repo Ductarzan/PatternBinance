@@ -30,27 +30,35 @@ import {
 } from "lucide-react";
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import symbolCatalog from "../lib/binance-usdt-symbols.json";
 import type { AiExplanation, Candle, MarketAnalysis, MarketType, WatchlistResponse } from "../lib/market-types";
 
-const COIN_OPTIONS = [
-  { symbol: "BTCUSDT", ticker: "BTC", name: "Bitcoin" },
-  { symbol: "ETHUSDT", ticker: "ETH", name: "Ethereum" },
-  { symbol: "BNBUSDT", ticker: "BNB", name: "BNB" },
-  { symbol: "SOLUSDT", ticker: "SOL", name: "Solana" },
-  { symbol: "XRPUSDT", ticker: "XRP", name: "XRP" },
-  { symbol: "DOGEUSDT", ticker: "DOGE", name: "Dogecoin" },
-  { symbol: "ADAUSDT", ticker: "ADA", name: "Cardano" },
-  { symbol: "AVAXUSDT", ticker: "AVAX", name: "Avalanche" },
-  { symbol: "LINKUSDT", ticker: "LINK", name: "Chainlink" },
-  { symbol: "DOTUSDT", ticker: "DOT", name: "Polkadot" },
-  { symbol: "LTCUSDT", ticker: "LTC", name: "Litecoin" },
-  { symbol: "BCHUSDT", ticker: "BCH", name: "Bitcoin Cash" },
-  { symbol: "TRXUSDT", ticker: "TRX", name: "TRON" },
-  { symbol: "SUIUSDT", ticker: "SUI", name: "Sui" },
-  { symbol: "NEARUSDT", ticker: "NEAR", name: "NEAR Protocol" },
-];
+const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
+const KNOWN_COIN_NAMES: Record<string, string> = {
+  BTC: "Bitcoin", ETH: "Ethereum", BNB: "BNB", SOL: "Solana", XRP: "XRP",
+  DOGE: "Dogecoin", ADA: "Cardano", AVAX: "Avalanche", LINK: "Chainlink",
+  DOT: "Polkadot", LTC: "Litecoin", BCH: "Bitcoin Cash", TRX: "TRON",
+  SUI: "Sui", NEAR: "NEAR Protocol",
+};
 
-const POPULAR_SYMBOLS = COIN_OPTIONS.slice(0, 5).map((coin) => coin.symbol);
+function buildCoinOptions(symbols: string[], fallbackName: string) {
+  const priority = new Map(POPULAR_SYMBOLS.map((symbol, index) => [symbol, index]));
+  return [...symbols]
+    .sort((left, right) => {
+      const leftRank = priority.get(left) ?? Number.MAX_SAFE_INTEGER;
+      const rightRank = priority.get(right) ?? Number.MAX_SAFE_INTEGER;
+      return leftRank - rightRank || left.localeCompare(right, "en");
+    })
+    .map((symbol) => {
+      const ticker = symbol.endsWith("USDT") ? symbol.slice(0, -4) : symbol;
+      return { symbol, ticker, name: KNOWN_COIN_NAMES[ticker] || fallbackName };
+    });
+}
+
+const COIN_OPTIONS: Record<MarketType, ReturnType<typeof buildCoinOptions>> = {
+  futures: buildCoinOptions(symbolCatalog.futures, "USD-M Perpetual"),
+  spot: buildCoinOptions(symbolCatalog.spot, "Spot market"),
+};
 
 function priceDigits(value: number) {
   if (value >= 1000) return 2;
@@ -338,20 +346,21 @@ export function MarketTerminal() {
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    const next = symbolInput.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
+    const next = symbolInput.toUpperCase().replace(/[^\p{L}\p{N}]/gu, "").slice(0, 40);
     if (next.length < 5) return;
     selectSymbol(next);
   };
 
   const coinResults = useMemo(() => {
+    const options = COIN_OPTIONS[market];
     const query = symbolInput === symbol
       ? ""
       : symbolInput.toUpperCase().replace(/USDT$/i, "").trim();
-    if (!query) return COIN_OPTIONS;
-    return COIN_OPTIONS.filter((coin) =>
-      coin.ticker.includes(query) || coin.name.toUpperCase().includes(query),
+    if (!query) return options;
+    return options.filter((coin) =>
+      coin.ticker.includes(query) || coin.symbol.includes(query) || coin.name.toUpperCase().includes(query),
     );
-  }, [symbol, symbolInput]);
+  }, [market, symbol, symbolInput]);
 
   const signalClass = analysis?.signal === "LONG" ? "positive" : analysis?.signal === "SHORT" ? "negative" : "neutral";
   const signalLabel = analysis?.signal === "LONG" ? "ƯU TIÊN LONG" : analysis?.signal === "SHORT" ? "ƯU TIÊN SHORT" : "CHỜ XÁC NHẬN";
@@ -442,7 +451,7 @@ export function MarketTerminal() {
           {searchOpen ? (
             <div className="coin-picker" id="coin-picker" role="listbox" aria-label="Chọn coin nhanh">
               <div className="coin-picker-head">
-                <div><strong>Chọn coin nhanh</strong><span>{coinResults.length} cặp USDT</span></div>
+                <div><strong>Chọn coin nhanh</strong><span>{coinResults.length === COIN_OPTIONS[market].length ? coinResults.length : `${coinResults.length}/${COIN_OPTIONS[market].length}`} cặp USDT</span></div>
                 <em>{market === "futures" ? "USD-M Futures" : "Spot"}</em>
               </div>
               <div className="coin-picker-list">
@@ -464,7 +473,7 @@ export function MarketTerminal() {
                   <div className="coin-empty">Không có coin phù hợp. Nhấn Enter để thử mã này.</div>
                 )}
               </div>
-              <div className="coin-picker-foot"><span>Gõ để lọc</span><span>Enter để phân tích</span></div>
+              <div className="coin-picker-foot"><span>Danh sách lưu sẵn · gõ để lọc</span><span>Chọn mới tải dữ liệu</span></div>
             </div>
           ) : null}
         </form>
