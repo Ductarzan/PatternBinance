@@ -125,6 +125,11 @@ export type WatchlistResponse = {
   market: MarketType;
   generatedAt: number;
   scanned: number;
+  successfulScans: number;
+  universeSize: number;
+  batch: number;
+  batchCount: number;
+  refreshIntervalMs: number;
   items: WatchlistItem[];
   methodology: string;
 };

@@ -1,14 +1,22 @@
 import { NextResponse } from "next/server";
+import symbolCatalog from "../../../lib/binance-usdt-symbols.json";
 import type { Candle, MarketType, Signal, WatchlistItem, WatchlistResponse } from "../../../lib/market-types";
 
 const FUTURES_BASE = "https://fapi.binance.com";
 const SPOT_BASE = "https://data-api.binance.vision";
-const WATCH_SYMBOLS = [
-  "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
-  "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "SUIUSDT", "NEARUSDT",
-];
+const TOP_VOLUME_LIMIT = 100;
+const BATCH_SIZE = 25;
+const SCAN_CONCURRENCY = 6;
+const CACHE_TTL_MS = 90_000;
 
-const cache = new Map<MarketType, { expires: number; data: WatchlistResponse }>();
+const cache = new Map<string, { expires: number; data: WatchlistResponse }>();
+type MarketSnapshot = {
+  generatedAt: number;
+  topTickers: Array<Record<string, string>>;
+  fundingMap: Map<string, number>;
+};
+const snapshotCache = new Map<MarketType, { expires: number; data: MarketSnapshot }>();
+const snapshotPending = new Map<MarketType, Promise<MarketSnapshot>>();
 
 const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
 const round = (value: number, digits = 2) => {
@@ -21,14 +29,17 @@ const average = (values: number[]) => values.length
 
 async function getJson<T>(url: string): Promise<T> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
+  const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
     const response = await fetch(url, {
       signal: controller.signal,
       headers: { Accept: "application/json", "User-Agent": "PatternDesk/1.0" },
       cache: "no-store",
     });
-    if (!response.ok) throw new Error(`Binance ${response.status}`);
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(`Binance ${response.status}: ${message.slice(0, 180)}`);
+    }
     return await response.json() as T;
   } finally {
     clearTimeout(timeout);
@@ -54,6 +65,81 @@ async function fetchKlines(market: MarketType, symbol: string, interval: string,
     `${base}${path}?symbol=${symbol}&interval=${interval}&limit=${limit}`,
   );
   return rows.map(toCandle);
+}
+
+async function getMarketSnapshot(market: MarketType) {
+  const cached = snapshotCache.get(market);
+  if (cached && cached.expires > Date.now()) return cached.data;
+  const pending = snapshotPending.get(market);
+  if (pending) return pending;
+
+  const request = (async () => {
+    const futures = market === "futures";
+    const base = futures ? FUTURES_BASE : SPOT_BASE;
+    const tickerPath = futures ? "/fapi/v1/ticker/24hr" : "/api/v3/ticker/24hr";
+    const [tickers, funding] = await Promise.all([
+      getJson<Array<Record<string, string>>>(`${base}${tickerPath}`),
+      futures
+        ? getJson<Array<Record<string, string>>>(`${base}/fapi/v1/premiumIndex`)
+        : Promise.resolve([]),
+    ]);
+    const availableSymbols = new Set(symbolCatalog[market]);
+    const data: MarketSnapshot = {
+      generatedAt: Date.now(),
+      topTickers: tickers
+        .filter((ticker) => availableSymbols.has(ticker.symbol) && Number(ticker.quoteVolume) > 0)
+        .sort((left, right) => Number(right.quoteVolume) - Number(left.quoteVolume))
+        .slice(0, TOP_VOLUME_LIMIT),
+      fundingMap: new Map(funding.map((item) => [item.symbol, Number(item.lastFundingRate)])),
+    };
+    snapshotCache.set(market, { expires: Date.now() + CACHE_TTL_MS, data });
+    return data;
+  })();
+  snapshotPending.set(market, request);
+  try {
+    return await request;
+  } finally {
+    snapshotPending.delete(market);
+  }
+}
+
+function aggregateTo1h(candles: Candle[]) {
+  const groups = new Map<number, Candle>();
+  candles.forEach((candle) => {
+    const time = Math.floor(candle.time / 3_600_000) * 3_600_000;
+    const current = groups.get(time);
+    if (!current) {
+      groups.set(time, { ...candle, time });
+      return;
+    }
+    current.high = Math.max(current.high, candle.high);
+    current.low = Math.min(current.low, candle.low);
+    current.close = candle.close;
+    current.volume += candle.volume;
+  });
+  return [...groups.values()].sort((left, right) => left.time - right.time);
+}
+
+async function mapSettledWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  task: (item: T) => Promise<R>,
+) {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      try {
+        results[index] = { status: "fulfilled", value: await task(items[index]) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function ema(values: number[], period: number) {
@@ -157,7 +243,7 @@ function scoreCoin(input: {
 
   return {
     symbol,
-    ticker: symbol.replace("USDT", ""),
+    ticker: symbol.replace(/USDT$/, ""),
     price: currentPrice,
     change24h: round(change24h, 2),
     quoteVolume24h,
@@ -175,31 +261,27 @@ function scoreCoin(input: {
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const market: MarketType = url.searchParams.get("market") === "spot" ? "spot" : "futures";
-  const cached = cache.get(market);
+  const batch = Number(url.searchParams.get("batch") || 0);
+  const batchCount = Math.ceil(TOP_VOLUME_LIMIT / BATCH_SIZE);
+  if (!Number.isInteger(batch) || batch < 0 || batch >= batchCount) {
+    return NextResponse.json({ error: "Batch scanner không hợp lệ." }, { status: 400 });
+  }
+  const cacheKey = `${market}:${batch}`;
+  const cached = cache.get(cacheKey);
   if (cached && cached.expires > Date.now()) {
     return NextResponse.json(cached.data, { headers: { "X-PatternDesk-Cache": "HIT" } });
   }
 
   try {
     const futures = market === "futures";
-    const base = futures ? FUTURES_BASE : SPOT_BASE;
-    const tickerPath = futures ? "/fapi/v1/ticker/24hr" : "/api/v3/ticker/24hr";
-    const [tickers, funding] = await Promise.all([
-      getJson<Array<Record<string, string>>>(`${base}${tickerPath}`),
-      futures
-        ? getJson<Array<Record<string, string>>>(`${base}/fapi/v1/premiumIndex`)
-        : Promise.resolve([]),
-    ]);
-    const tickerMap = new Map(tickers.map((ticker) => [ticker.symbol, ticker]));
-    const fundingMap = new Map(funding.map((item) => [item.symbol, Number(item.lastFundingRate)]));
+    const snapshot = await getMarketSnapshot(market);
+    const { topTickers, fundingMap } = snapshot;
+    const batchTickers = topTickers.slice(batch * BATCH_SIZE, (batch + 1) * BATCH_SIZE);
 
-    const scans = await Promise.allSettled(WATCH_SYMBOLS.map(async (symbol) => {
-      const ticker = tickerMap.get(symbol);
-      if (!ticker) throw new Error(`Missing ticker ${symbol}`);
-      const [candles15m, candles1h] = await Promise.all([
-        fetchKlines(market, symbol, "15m", 240),
-        fetchKlines(market, symbol, "1h", 160),
-      ]);
+    const scans = await mapSettledWithConcurrency(batchTickers, SCAN_CONCURRENCY, async (ticker) => {
+      const symbol = ticker.symbol;
+      const candles15m = await fetchKlines(market, symbol, "15m", 240);
+      const candles1h = aggregateTo1h(candles15m);
       return scoreCoin({
         symbol,
         candles15m,
@@ -207,25 +289,29 @@ export async function GET(request: Request) {
         ticker,
         fundingRate: futures ? fundingMap.get(symbol) ?? null : null,
       });
-    }));
+    });
 
     const items = scans
       .filter((result): result is PromiseFulfilledResult<WatchlistItem> => result.status === "fulfilled")
       .map((result) => result.value)
-      .sort((left, right) => right.score - left.score || Math.abs(right.change24h) - Math.abs(left.change24h))
-      .slice(0, 8);
+      .sort((left, right) => right.score - left.score || Math.abs(right.change24h) - Math.abs(left.change24h));
 
     if (!items.length) throw new Error("Không có đủ dữ liệu để xếp hạng watchlist.");
     const data: WatchlistResponse = {
       market,
-      generatedAt: Date.now(),
-      scanned: scans.length,
+      generatedAt: snapshot.generatedAt,
+      scanned: batchTickers.length,
+      successfulScans: items.length,
+      universeSize: topTickers.length,
+      batch,
+      batchCount,
+      refreshIntervalMs: CACHE_TTL_MS,
       items,
-      methodology: "Xếp hạng theo xu hướng 15m/1h, RSI, volume, ATR, thanh khoản và funding; không phải khuyến nghị mua bán.",
+      methodology: "Luôn quét top 100 cặp theo quote volume 24h; xếp hạng bằng xu hướng 15m/1h, RSI, volume, ATR và funding.",
     };
-    cache.set(market, { expires: Date.now() + 90_000, data });
+    cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {
-      headers: { "Cache-Control": "public, s-maxage=90, stale-while-revalidate=180" },
+      headers: { "Cache-Control": "public, s-maxage=90, stale-while-revalidate=180", "X-PatternDesk-Cache": "MISS" },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Không thể quét watchlist.";

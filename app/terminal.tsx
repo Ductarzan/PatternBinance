@@ -34,6 +34,8 @@ import symbolCatalog from "../lib/binance-usdt-symbols.json";
 import type { AiExplanation, Candle, MarketAnalysis, MarketType, WatchlistResponse } from "../lib/market-types";
 
 const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
+const WATCHLIST_BATCH_COUNT = 4;
+const WATCHLIST_REFRESH_MS = 90_000;
 const KNOWN_COIN_NAMES: Record<string, string> = {
   BTC: "Bitcoin", ETH: "Ethereum", BNB: "BNB", SOL: "Solana", XRP: "XRP",
   DOGE: "Dogecoin", ADA: "Cardano", AVAX: "Avalanche", LINK: "Chainlink",
@@ -311,13 +313,43 @@ export function MarketTerminal() {
       setWatchlistLoading(true);
       setWatchlistError(null);
       try {
-        const response = await fetch(`/api/watchlist?market=${market}`, {
-          cache: "no-store",
-          signal: controller.signal,
+        const requests = Array.from({ length: WATCHLIST_BATCH_COUNT }, async (_, batch) => {
+          const response = await fetch(`/api/watchlist?market=${market}&batch=${batch}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          const payload = await response.json() as WatchlistResponse & { error?: string };
+          if (!response.ok) throw new Error(payload.error || `Không thể quét batch ${batch + 1}.`);
+          return payload;
         });
-        const payload = await response.json() as WatchlistResponse & { error?: string };
-        if (!response.ok) throw new Error(payload.error || "Không thể quét danh sách coin.");
-        setWatchlist(payload);
+        const settled = await Promise.allSettled(requests);
+        const batches = settled
+          .filter((result): result is PromiseFulfilledResult<WatchlistResponse> => result.status === "fulfilled")
+          .map((result) => result.value);
+        if (!batches.length) {
+          const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+          throw failed?.reason instanceof Error ? failed.reason : new Error("Không thể quét top 100 coin.");
+        }
+        const uniqueItems = new Map(batches.flatMap((batch) => batch.items).map((item) => [item.symbol, item]));
+        const first = batches[0];
+        const universeSize = Math.max(...batches.map((batch) => batch.universeSize));
+        const successfulScans = batches.reduce((total, batch) => total + batch.successfulScans, 0);
+        setWatchlist({
+          ...first,
+          generatedAt: Math.max(...batches.map((batch) => batch.generatedAt)),
+          scanned: universeSize,
+          successfulScans,
+          universeSize,
+          batch: 0,
+          batchCount: WATCHLIST_BATCH_COUNT,
+          refreshIntervalMs: WATCHLIST_REFRESH_MS,
+          items: [...uniqueItems.values()]
+            .sort((left, right) => right.score - left.score || Math.abs(right.change24h) - Math.abs(left.change24h))
+            .slice(0, 8),
+        });
+        if (batches.length < WATCHLIST_BATCH_COUNT) {
+          setWatchlistError(`Đã quét ${successfulScans}/${universeSize} cặp; một phần dữ liệu Binance chưa phản hồi.`);
+        }
       } catch (requestError) {
         if (requestError instanceof DOMException && requestError.name === "AbortError") return;
         setWatchlistError(requestError instanceof Error ? requestError.message : "Không thể quét danh sách coin.");
@@ -326,7 +358,11 @@ export function MarketTerminal() {
       }
     };
     loadWatchlist();
-    return () => controller.abort();
+    const refreshTimer = window.setInterval(() => setWatchlistKey((key) => key + 1), WATCHLIST_REFRESH_MS);
+    return () => {
+      controller.abort();
+      window.clearInterval(refreshTimer);
+    };
   }, [market, watchlistKey]);
 
   useEffect(() => {
@@ -516,7 +552,9 @@ export function MarketTerminal() {
                 <div><span className="eyebrow">MARKET SCANNER</span><h2>Coin cần theo dõi</h2></div>
               </div>
               <div className="watchlist-actions">
-                {watchlist ? <span>{watchlist.scanned} cặp · {formatTime(watchlist.generatedAt)}</span> : null}
+                {watchlist
+                  ? <span>{watchlist.successfulScans}/{watchlist.universeSize} cặp · top volume 24h · {formatTime(watchlist.generatedAt)}</span>
+                  : <span>Đang quét top 100 theo volume 24h</span>}
                 <button
                   type="button"
                   aria-label="Quét lại danh sách coin"
@@ -557,7 +595,7 @@ export function MarketTerminal() {
               </div>
             )}
             <div className="watchlist-foot">
-              <span><CircleDot size={11} /> {watchlist?.methodology || "Đang tổng hợp xu hướng, động lượng và thanh khoản từ Binance."}</span>
+              <span><CircleDot size={11} /> {watchlist?.methodology || "Đang quét top 100 cặp có volume 24h lớn nhất trên Binance."} Tự quét lại mỗi 90 giây.</span>
               {watchlistError && watchlist ? <em><AlertTriangle size={11} /> Dữ liệu cũ đang được giữ lại</em> : null}
             </div>
           </section>
