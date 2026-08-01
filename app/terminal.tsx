@@ -31,7 +31,25 @@ import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AiExplanation, Candle, MarketAnalysis, MarketType } from "../lib/market-types";
 
-const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
+const COIN_OPTIONS = [
+  { symbol: "BTCUSDT", ticker: "BTC", name: "Bitcoin" },
+  { symbol: "ETHUSDT", ticker: "ETH", name: "Ethereum" },
+  { symbol: "BNBUSDT", ticker: "BNB", name: "BNB" },
+  { symbol: "SOLUSDT", ticker: "SOL", name: "Solana" },
+  { symbol: "XRPUSDT", ticker: "XRP", name: "XRP" },
+  { symbol: "DOGEUSDT", ticker: "DOGE", name: "Dogecoin" },
+  { symbol: "ADAUSDT", ticker: "ADA", name: "Cardano" },
+  { symbol: "AVAXUSDT", ticker: "AVAX", name: "Avalanche" },
+  { symbol: "LINKUSDT", ticker: "LINK", name: "Chainlink" },
+  { symbol: "DOTUSDT", ticker: "DOT", name: "Polkadot" },
+  { symbol: "LTCUSDT", ticker: "LTC", name: "Litecoin" },
+  { symbol: "BCHUSDT", ticker: "BCH", name: "Bitcoin Cash" },
+  { symbol: "TRXUSDT", ticker: "TRX", name: "TRON" },
+  { symbol: "SUIUSDT", ticker: "SUI", name: "Sui" },
+  { symbol: "NEARUSDT", ticker: "NEAR", name: "NEAR Protocol" },
+];
+
+const POPULAR_SYMBOLS = COIN_OPTIONS.slice(0, 5).map((coin) => coin.symbol);
 
 function priceDigits(value: number) {
   if (value >= 1000) return 2;
@@ -203,6 +221,7 @@ function LoadingTerminal({ symbol }: { symbol: string }) {
 export function MarketTerminal() {
   const [symbolInput, setSymbolInput] = useState("BTCUSDT");
   const [symbol, setSymbol] = useState("BTCUSDT");
+  const [searchOpen, setSearchOpen] = useState(false);
   const [market, setMarket] = useState<MarketType>("futures");
   const [analysis, setAnalysis] = useState<MarketAnalysis | null>(null);
   const [ai, setAi] = useState<AiExplanation | null>(null);
@@ -210,6 +229,8 @@ export function MarketTerminal() {
   const [aiLoading, setAiLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const searchRef = useRef<HTMLFormElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const loadMarket = useCallback(async (signalController: AbortSignal) => {
     setLoading(true);
@@ -263,14 +284,37 @@ export function MarketTerminal() {
     return () => controller.abort();
   }, [analysis]);
 
+  useEffect(() => {
+    const closeSearch = (event: PointerEvent) => {
+      if (!searchRef.current?.contains(event.target as Node)) setSearchOpen(false);
+    };
+    document.addEventListener("pointerdown", closeSearch);
+    return () => document.removeEventListener("pointerdown", closeSearch);
+  }, []);
+
+  const selectSymbol = (next: string) => {
+    setSymbolInput(next);
+    setSearchOpen(false);
+    if (next === symbol) setRefreshKey((key) => key + 1);
+    else setSymbol(next);
+  };
+
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     const next = symbolInput.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
     if (next.length < 5) return;
-    setSymbolInput(next);
-    if (next === symbol) setRefreshKey((key) => key + 1);
-    else setSymbol(next);
+    selectSymbol(next);
   };
+
+  const coinResults = useMemo(() => {
+    const query = symbolInput === symbol
+      ? ""
+      : symbolInput.toUpperCase().replace(/USDT$/i, "").trim();
+    if (!query) return COIN_OPTIONS;
+    return COIN_OPTIONS.filter((coin) =>
+      coin.ticker.includes(query) || coin.name.toUpperCase().includes(query),
+    );
+  }, [symbol, symbolInput]);
 
   const signalClass = analysis?.signal === "LONG" ? "positive" : analysis?.signal === "SHORT" ? "negative" : "neutral";
   const signalLabel = analysis?.signal === "LONG" ? "ƯU TIÊN LONG" : analysis?.signal === "SHORT" ? "ƯU TIÊN SHORT" : "CHỜ XÁC NHẬN";
@@ -311,11 +355,46 @@ export function MarketTerminal() {
       </nav>
 
       <header className="control-deck">
-        <form className="symbol-search" onSubmit={handleSubmit}>
-          <Search size={17} />
+        <form
+          ref={searchRef}
+          className={`symbol-search ${searchOpen ? "open" : ""}`}
+          onSubmit={handleSubmit}
+        >
+          <button
+            className="search-trigger"
+            type="button"
+            aria-label="Mở danh sách coin"
+            aria-expanded={searchOpen}
+            aria-controls="coin-picker"
+            onClick={() => {
+              setSearchOpen((open) => !open);
+              searchInputRef.current?.focus();
+            }}
+          >
+            <Search size={17} />
+          </button>
           <input
+            ref={searchInputRef}
             value={symbolInput}
-            onChange={(event) => setSymbolInput(event.target.value.toUpperCase())}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={searchOpen}
+            aria-controls="coin-picker"
+            onFocus={(event) => {
+              setSearchOpen(true);
+              event.currentTarget.select();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setSearchOpen(false);
+                event.currentTarget.blur();
+              }
+              if (event.key === "ArrowDown") setSearchOpen(true);
+            }}
+            onChange={(event) => {
+              setSymbolInput(event.target.value.toUpperCase());
+              setSearchOpen(true);
+            }}
             aria-label="Mã giao dịch"
             autoComplete="off"
             spellCheck={false}
@@ -323,6 +402,34 @@ export function MarketTerminal() {
           <button className="symbol-submit" type="submit" aria-label="Phân tích mã">
             <ArrowRight size={15} />
           </button>
+          {searchOpen ? (
+            <div className="coin-picker" id="coin-picker" role="listbox" aria-label="Chọn coin nhanh">
+              <div className="coin-picker-head">
+                <div><strong>Chọn coin nhanh</strong><span>{coinResults.length} cặp USDT</span></div>
+                <em>{market === "futures" ? "USD-M Futures" : "Spot"}</em>
+              </div>
+              <div className="coin-picker-list">
+                {coinResults.length ? coinResults.map((coin) => (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={symbol === coin.symbol}
+                    className={symbol === coin.symbol ? "selected" : ""}
+                    key={coin.symbol}
+                    onClick={() => selectSymbol(coin.symbol)}
+                  >
+                    <span className="coin-avatar">{coin.ticker.slice(0, 1)}</span>
+                    <span className="coin-copy"><strong>{coin.ticker}</strong><small>{coin.name}</small></span>
+                    <em>{coin.symbol}</em>
+                    {symbol === coin.symbol ? <Check size={14} /> : null}
+                  </button>
+                )) : (
+                  <div className="coin-empty">Không có coin phù hợp. Nhấn Enter để thử mã này.</div>
+                )}
+              </div>
+              <div className="coin-picker-foot"><span>Gõ để lọc</span><span>Enter để phân tích</span></div>
+            </div>
+          ) : null}
         </form>
         <div className="market-switch" aria-label="Chọn thị trường">
           <button className={market === "futures" ? "active" : ""} onClick={() => setMarket("futures")}>USD-M Futures</button>
@@ -333,7 +440,7 @@ export function MarketTerminal() {
             <button
               key={pair}
               className={symbol === pair ? "active" : ""}
-              onClick={() => { setSymbolInput(pair); setSymbol(pair); }}
+              onClick={() => selectSymbol(pair)}
             >
               {pair.replace("USDT", "")}
             </button>

@@ -27,10 +27,11 @@ test("server-renders the PatternDesk application shell", async () => {
 });
 
 test("keeps market logic deterministic and Gemini server-only", async () => {
-  const [marketRoute, analyzer, explainRoute, packageJson] = await Promise.all([
+  const [marketRoute, analyzer, explainRoute, terminal, packageJson] = await Promise.all([
     readFile(new URL("../app/api/market/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/analyze-market.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/explain/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/terminal.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
 
@@ -39,6 +40,8 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   assert.match(analyzer, /forwardBars = 12/);
   assert.match(explainRoute, /process\.env\.GEMINI_API_KEY/);
   assert.match(explainRoute, /không sửa, suy đoán hoặc tạo thêm giá/);
+  assert.match(terminal, /aria-label="Chọn coin nhanh"/);
+  assert.match(terminal, /onClick=\{\(\) => selectSymbol\(coin\.symbol\)\}/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview", root)));
 });
