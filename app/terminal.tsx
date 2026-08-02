@@ -564,12 +564,12 @@ export function MarketTerminal() {
             <div className="panel-header watchlist-header">
               <div className="watchlist-title">
                 <span className="watchlist-icon"><Radar size={17} /></span>
-                <div><span className="eyebrow">RSI OVERSOLD SCANNER</span><h2>Top coin RSI &lt; 20</h2></div>
+                <div><span className="eyebrow">RSI OVERSOLD SCANNER</span><h2>Top coin RSI(7) &lt; 20</h2></div>
               </div>
               <div className="watchlist-actions">
                 {watchlist
                   ? <span>{watchlist.successfulScans}/{watchlist.universeSize} đã quét · {watchlist.matchedCount} coin đạt ngưỡng · {formatTime(watchlist.generatedAt)}</span>
-                  : <span>Đang tìm RSI &lt; 20 trong top 200 volume</span>}
+                  : <span>Đang tìm RSI(7) &lt; 20 trong top 200 volume</span>}
                 <button
                   type="button"
                   aria-label="Quét lại danh sách coin"
@@ -583,7 +583,7 @@ export function MarketTerminal() {
             {watchlistError && !watchlist ? (
               <div className="watchlist-error"><AlertTriangle size={15} /><span>{watchlistError}</span><button onClick={() => setWatchlistKey((key) => key + 1)}>Thử lại</button></div>
             ) : watchlist && !watchlist.items.length ? (
-              <div className="watchlist-empty"><Gauge size={18} /><span><b>Chưa có coin RSI dưới 20</b>Top 200 volume hiện không có cặp nào đạt ngưỡng ở khung 15m, 1h hoặc 4h.</span></div>
+              <div className="watchlist-empty"><Gauge size={18} /><span><b>Chưa có coin RSI(7) dưới 20</b>Top 200 volume hiện không có cặp nào đạt ngưỡng ở khung 15m, 1h hoặc 4h.</span></div>
             ) : (
               <div className={watchlistLoading ? "watchlist-cards loading" : "watchlist-cards"}>
                 {watchlist ? watchlist.items.slice(0, 6).map((item, index) => {
@@ -594,16 +594,16 @@ export function MarketTerminal() {
                       className={`watch-card ${itemClass} ${symbol === item.symbol ? "active" : ""}`}
                       key={item.symbol}
                       onClick={() => selectSymbol(item.symbol)}
-                      aria-label={`Phân tích ${item.ticker}, RSI thấp nhất ${item.lowestRsi}`}
+                      aria-label={`Phân tích ${item.ticker}, RSI(7) thấp nhất ${item.lowestRsi}`}
                     >
                       <span className="watch-rank">#{index + 1}</span>
                       <span className={`watch-signal ${itemClass}`}>
                         <Gauge size={12} /> {item.oversoldFrames.join(" · ")}
                       </span>
                       <span className="watch-coin"><i>{item.ticker.slice(0, 1)}</i><b>{item.ticker}<small>/USDT</small></b></span>
-                      <span className="watch-score"><strong>{item.lowestRsi}</strong><small>RSI thấp</small></span>
+                      <span className="watch-score"><strong>{item.lowestRsi}</strong><small>RSI(7) thấp</small></span>
                       <span className="watch-price">{formatPrice(item.price)}<em className={item.change24h >= 0 ? "positive-text" : "negative-text"}>{item.change24h >= 0 ? "+" : ""}{item.change24h}%</em></span>
-                      <span className="watch-reason">{item.reasons[0]}</span>
+                      <span className="watch-reason">15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</span>
                       <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
                     </button>
                   );
@@ -611,7 +611,7 @@ export function MarketTerminal() {
               </div>
             )}
             <div className="watchlist-foot">
-              <span><CircleDot size={11} /> {watchlist?.methodology || "Đang tìm coin RSI < 20 trên các khung 15m, 1h và 4h."} Tự quét lại mỗi 90 giây.</span>
+              <span><CircleDot size={11} /> {watchlist?.methodology || "Đang tìm coin RSI(7) < 20 trên các khung 15m, 1h và 4h, bao gồm nến đang chạy."} Tự quét lại mỗi 90 giây.</span>
               {watchlistError && watchlist ? <em><AlertTriangle size={11} /> Dữ liệu cũ đang được giữ lại</em> : null}
             </div>
           </section>

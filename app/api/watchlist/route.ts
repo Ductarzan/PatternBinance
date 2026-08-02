@@ -8,7 +8,7 @@ const TOP_VOLUME_LIMIT = 200;
 const BATCH_SIZE = 15;
 const SCAN_CONCURRENCY = 3;
 const RSI_HISTORY_LIMIT = 200;
-const RSI_PERIOD = 12;
+const RSI_PERIOD = 7;
 const RSI_OVERSOLD_THRESHOLD = 20;
 const CACHE_TTL_MS = 90_000;
 
@@ -231,7 +231,7 @@ function scoreCoin(input: {
   ));
 
   const reasons: string[] = [
-    `RSI 15m ${round(rsi15m, 1)} · 1h ${round(rsi1h, 1)} · 4h ${round(rsi4h, 1)}`,
+    `RSI(7) 15m ${round(rsi15m, 1)} · 1h ${round(rsi1h, 1)} · 4h ${round(rsi4h, 1)}`,
   ];
   if (aligned) reasons.push(`15m và 1h cùng xu hướng ${trend15m > 0 ? "tăng" : "giảm"}`);
   else if (trend15m || trend1h) reasons.push("Xu hướng đang hình thành, cần chờ thêm đồng thuận");
@@ -318,7 +318,7 @@ export async function GET(request: Request) {
       batchCount,
       refreshIntervalMs: CACHE_TTL_MS,
       items,
-      methodology: "Quét top 200 volume 24h bằng RSI(12) Wilder/RMA trên 200 nến riêng cho từng khung 15m, 1h và 4h; ngưỡng hiển thị < 20.",
+      methodology: "Quét top 200 volume 24h bằng RSI(7) Wilder/RMA trên 200 nến riêng cho từng khung 15m, 1h và 4h, bao gồm nến đang chạy; ngưỡng hiển thị < 20.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {
