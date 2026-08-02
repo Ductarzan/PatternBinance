@@ -5,8 +5,10 @@ import type { Candle, MarketType, Signal, WatchlistItem, WatchlistResponse } fro
 const FUTURES_BASE = "https://fapi.binance.com";
 const SPOT_BASE = "https://data-api.binance.vision";
 const TOP_VOLUME_LIMIT = 100;
-const BATCH_SIZE = 25;
-const SCAN_CONCURRENCY = 6;
+const BATCH_SIZE = 15;
+const SCAN_CONCURRENCY = 3;
+const RSI_HISTORY_LIMIT = 200;
+const RSI_PERIOD = 12;
 const CACHE_TTL_MS = 90_000;
 
 const cache = new Map<string, { expires: number; data: WatchlistResponse }>();
@@ -103,23 +105,6 @@ async function getMarketSnapshot(market: MarketType) {
   }
 }
 
-function aggregateCandles(candles: Candle[], intervalMs: number) {
-  const groups = new Map<number, Candle>();
-  candles.forEach((candle) => {
-    const time = Math.floor(candle.time / intervalMs) * intervalMs;
-    const current = groups.get(time);
-    if (!current) {
-      groups.set(time, { ...candle, time });
-      return;
-    }
-    current.high = Math.max(current.high, candle.high);
-    current.low = Math.min(current.low, candle.low);
-    current.close = candle.close;
-    current.volume += candle.volume;
-  });
-  return [...groups.values()].sort((left, right) => left.time - right.time);
-}
-
 async function mapSettledWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
@@ -152,15 +137,18 @@ function ema(values: number[], period: number) {
   return result;
 }
 
-function rsi(candles: Candle[], period = 14) {
+function rsi(candles: Candle[], period = RSI_PERIOD) {
   if (candles.length <= period) return 50;
   const closes = candles.map((candle) => candle.close);
   const changes = closes.slice(1).map((close, index) => close - closes[index]);
-  const recent = changes.slice(-period);
-  const gains = average(recent.map((change) => Math.max(change, 0)));
-  const losses = average(recent.map((change) => Math.max(-change, 0)));
-  if (!losses) return gains ? 100 : 50;
-  return 100 - 100 / (1 + gains / losses);
+  let averageGain = average(changes.slice(0, period).map((change) => Math.max(change, 0)));
+  let averageLoss = average(changes.slice(0, period).map((change) => Math.max(-change, 0)));
+  changes.slice(period).forEach((change) => {
+    averageGain = (averageGain * (period - 1) + Math.max(change, 0)) / period;
+    averageLoss = (averageLoss * (period - 1) + Math.max(-change, 0)) / period;
+  });
+  if (!averageLoss) return averageGain ? 100 : 50;
+  return 100 - 100 / (1 + averageGain / averageLoss);
 }
 
 function atrPercent(candles: Candle[], period = 14) {
@@ -291,9 +279,11 @@ export async function GET(request: Request) {
 
     const scans = await mapSettledWithConcurrency(batchTickers, SCAN_CONCURRENCY, async (ticker) => {
       const symbol = ticker.symbol;
-      const candles15m = await fetchKlines(market, symbol, "15m", 320);
-      const candles1h = aggregateCandles(candles15m, 3_600_000);
-      const candles4h = aggregateCandles(candles15m, 14_400_000);
+      const [candles15m, candles1h, candles4h] = await Promise.all([
+        fetchKlines(market, symbol, "15m", RSI_HISTORY_LIMIT),
+        fetchKlines(market, symbol, "1h", RSI_HISTORY_LIMIT),
+        fetchKlines(market, symbol, "4h", RSI_HISTORY_LIMIT),
+      ]);
       return scoreCoin({
         symbol,
         candles15m,
@@ -327,7 +317,7 @@ export async function GET(request: Request) {
       batchCount,
       refreshIntervalMs: CACHE_TTL_MS,
       items,
-      methodology: "Quét top 100 cặp theo volume 24h; chỉ hiển thị coin có RSI < 15 ở ít nhất một khung 15m, 1h hoặc 4h.",
+      methodology: "Quét top 100 volume 24h bằng RSI(12) Wilder/RMA trên 200 nến riêng cho từng khung 15m, 1h và 4h; ngưỡng hiển thị < 15.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {

@@ -40,9 +40,12 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
 
   assert.match(marketRoute, /fetchKlines\(market, symbol, "15m", 5000\)/);
   assert.match(watchlistRoute, /TOP_VOLUME_LIMIT = 100/);
-  assert.match(watchlistRoute, /BATCH_SIZE = 25/);
+  assert.match(watchlistRoute, /BATCH_SIZE = 15/);
+  assert.match(watchlistRoute, /RSI_HISTORY_LIMIT = 200/);
+  assert.match(watchlistRoute, /RSI_PERIOD = 12/);
   assert.match(watchlistRoute, /Number\(right\.quoteVolume\) - Number\(left\.quoteVolume\)/);
-  assert.match(watchlistRoute, /aggregateCandles\(candles15m, 14_400_000\)/);
+  assert.match(watchlistRoute, /fetchKlines\(market, symbol, "4h", RSI_HISTORY_LIMIT\)/);
+  assert.match(watchlistRoute, /averageGain \* \(period - 1\)/);
   assert.match(watchlistRoute, /value < 15/);
   assert.match(watchlistRoute, /oversoldFrames\.length/);
   assert.match(watchlistRoute, /trend15m \* 0\.36/);
@@ -57,6 +60,7 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   assert.match(terminal, /onClick=\{\(\) => selectSymbol\(coin\.symbol\)\}/);
   assert.match(terminal, /COIN_OPTIONS\[market\]/);
   assert.match(terminal, /WATCHLIST_REFRESH_MS = 90_000/);
+  assert.match(terminal, /WATCHLIST_REQUEST_CONCURRENCY = 2/);
   assert.match(terminal, /Top coin RSI/);
   assert.match(terminal, /RSI thấp nhất/);
   assert.ok(catalog.futures.length > 500);

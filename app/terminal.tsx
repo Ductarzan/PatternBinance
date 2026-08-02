@@ -34,7 +34,8 @@ import symbolCatalog from "../lib/binance-usdt-symbols.json";
 import type { AiExplanation, Candle, MarketAnalysis, MarketType, WatchlistResponse } from "../lib/market-types";
 
 const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
-const WATCHLIST_BATCH_COUNT = 4;
+const WATCHLIST_BATCH_COUNT = 7;
+const WATCHLIST_REQUEST_CONCURRENCY = 2;
 const WATCHLIST_REFRESH_MS = 90_000;
 const KNOWN_COIN_NAMES: Record<string, string> = {
   BTC: "Bitcoin", ETH: "Ethereum", BNB: "BNB", SOL: "Solana", XRP: "XRP",
@@ -313,16 +314,24 @@ export function MarketTerminal() {
       setWatchlistLoading(true);
       setWatchlistError(null);
       try {
-        const requests = Array.from({ length: WATCHLIST_BATCH_COUNT }, async (_, batch) => {
-          const response = await fetch(`/api/watchlist?market=${market}&batch=${batch}`, {
-            cache: "no-store",
-            signal: controller.signal,
-          });
-          const payload = await response.json() as WatchlistResponse & { error?: string };
-          if (!response.ok) throw new Error(payload.error || `Không thể quét batch ${batch + 1}.`);
-          return payload;
-        });
-        const settled = await Promise.allSettled(requests);
+        const settled: Array<PromiseSettledResult<WatchlistResponse>> = [];
+        for (let start = 0; start < WATCHLIST_BATCH_COUNT; start += WATCHLIST_REQUEST_CONCURRENCY) {
+          if (controller.signal.aborted) return;
+          const group = Array.from(
+            { length: Math.min(WATCHLIST_REQUEST_CONCURRENCY, WATCHLIST_BATCH_COUNT - start) },
+            async (_, offset) => {
+              const batch = start + offset;
+              const response = await fetch(`/api/watchlist?market=${market}&batch=${batch}`, {
+                cache: "no-store",
+                signal: controller.signal,
+              });
+              const payload = await response.json() as WatchlistResponse & { error?: string };
+              if (!response.ok) throw new Error(payload.error || `Không thể quét batch ${batch + 1}.`);
+              return payload;
+            },
+          );
+          settled.push(...await Promise.allSettled(group));
+        }
         const batches = settled
           .filter((result): result is PromiseFulfilledResult<WatchlistResponse> => result.status === "fulfilled")
           .map((result) => result.value);
