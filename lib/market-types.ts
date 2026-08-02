@@ -115,6 +115,9 @@ export type WatchlistItem = {
   signal: Signal;
   rsi15m: number;
   rsi1h: number;
+  rsi4h: number;
+  lowestRsi: number;
+  oversoldFrames: Array<"15m" | "1h" | "4h">;
   atrPercent: number;
   volumeRatio: number;
   fundingRate: number | null;
@@ -126,6 +129,7 @@ export type WatchlistResponse = {
   generatedAt: number;
   scanned: number;
   successfulScans: number;
+  matchedCount: number;
   universeSize: number;
   batch: number;
   batchCount: number;

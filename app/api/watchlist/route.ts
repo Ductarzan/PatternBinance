@@ -103,10 +103,10 @@ async function getMarketSnapshot(market: MarketType) {
   }
 }
 
-function aggregateTo1h(candles: Candle[]) {
+function aggregateCandles(candles: Candle[], intervalMs: number) {
   const groups = new Map<number, Candle>();
   candles.forEach((candle) => {
-    const time = Math.floor(candle.time / 3_600_000) * 3_600_000;
+    const time = Math.floor(candle.time / intervalMs) * intervalMs;
     const current = groups.get(time);
     if (!current) {
       groups.set(time, { ...candle, time });
@@ -191,10 +191,11 @@ function scoreCoin(input: {
   symbol: string;
   candles15m: Candle[];
   candles1h: Candle[];
+  candles4h: Candle[];
   ticker: Record<string, string>;
   fundingRate: number | null;
 }): WatchlistItem {
-  const { symbol, candles15m, candles1h, ticker, fundingRate } = input;
+  const { symbol, candles15m, candles1h, candles4h, ticker, fundingRate } = input;
   const currentPrice = Number(ticker.lastPrice) || candles15m.at(-1)!.close;
   const change24h = Number(ticker.priceChangePercent) || 0;
   const quoteVolume24h = Number(ticker.quoteVolume) || 0;
@@ -202,6 +203,12 @@ function scoreCoin(input: {
   const trend1h = trend(candles1h);
   const rsi15m = rsi(candles15m);
   const rsi1h = rsi(candles1h);
+  const rsi4h = rsi(candles4h);
+  const rsiByFrame = { "15m": rsi15m, "1h": rsi1h, "4h": rsi4h };
+  const oversoldFrames = (Object.entries(rsiByFrame) as Array<["15m" | "1h" | "4h", number]>)
+    .filter(([, value]) => value < 15)
+    .map(([frame]) => frame);
+  const lowestRsi = Math.min(rsi15m, rsi1h, rsi4h);
   const momentum15m = rsi15m > 55 ? 1 : rsi15m < 45 ? -1 : 0;
   const momentum1h = rsi1h > 55 ? 1 : rsi1h < 45 ? -1 : 0;
   const momentumDirection = (momentum15m + momentum1h) / 2;
@@ -234,12 +241,13 @@ function scoreCoin(input: {
     100,
   ));
 
-  const reasons: string[] = [];
+  const reasons: string[] = [
+    `RSI 15m ${round(rsi15m, 1)} · 1h ${round(rsi1h, 1)} · 4h ${round(rsi4h, 1)}`,
+  ];
   if (aligned) reasons.push(`15m và 1h cùng xu hướng ${trend15m > 0 ? "tăng" : "giảm"}`);
   else if (trend15m || trend1h) reasons.push("Xu hướng đang hình thành, cần chờ thêm đồng thuận");
   else reasons.push("Giá đang nén quanh EMA20/50");
   if (volumeRatio >= 1) reasons.push(`Volume 15m đạt ${round(volumeRatio, 2)}× trung bình`);
-  else reasons.push(`RSI 15m ${round(rsi15m, 1)} · RSI 1h ${round(rsi1h, 1)}`);
 
   return {
     symbol,
@@ -251,6 +259,9 @@ function scoreCoin(input: {
     signal,
     rsi15m: round(rsi15m, 1),
     rsi1h: round(rsi1h, 1),
+    rsi4h: round(rsi4h, 1),
+    lowestRsi: round(lowestRsi, 1),
+    oversoldFrames,
     atrPercent: round(volatility, 2),
     volumeRatio: round(volumeRatio, 2),
     fundingRate,
@@ -280,34 +291,43 @@ export async function GET(request: Request) {
 
     const scans = await mapSettledWithConcurrency(batchTickers, SCAN_CONCURRENCY, async (ticker) => {
       const symbol = ticker.symbol;
-      const candles15m = await fetchKlines(market, symbol, "15m", 240);
-      const candles1h = aggregateTo1h(candles15m);
+      const candles15m = await fetchKlines(market, symbol, "15m", 320);
+      const candles1h = aggregateCandles(candles15m, 3_600_000);
+      const candles4h = aggregateCandles(candles15m, 14_400_000);
       return scoreCoin({
         symbol,
         candles15m,
         candles1h,
+        candles4h,
         ticker,
         fundingRate: futures ? fundingMap.get(symbol) ?? null : null,
       });
     });
 
-    const items = scans
+    const successfulItems = scans
       .filter((result): result is PromiseFulfilledResult<WatchlistItem> => result.status === "fulfilled")
-      .map((result) => result.value)
-      .sort((left, right) => right.score - left.score || Math.abs(right.change24h) - Math.abs(left.change24h));
+      .map((result) => result.value);
+    const items = successfulItems
+      .filter((item) => item.oversoldFrames.length > 0)
+      .sort((left, right) =>
+        right.oversoldFrames.length - left.oversoldFrames.length ||
+        left.lowestRsi - right.lowestRsi ||
+        right.quoteVolume24h - left.quoteVolume24h,
+      );
 
-    if (!items.length) throw new Error("Không có đủ dữ liệu để xếp hạng watchlist.");
+    if (!successfulItems.length) throw new Error("Không có đủ dữ liệu để quét RSI watchlist.");
     const data: WatchlistResponse = {
       market,
       generatedAt: snapshot.generatedAt,
       scanned: batchTickers.length,
-      successfulScans: items.length,
+      successfulScans: successfulItems.length,
+      matchedCount: items.length,
       universeSize: topTickers.length,
       batch,
       batchCount,
       refreshIntervalMs: CACHE_TTL_MS,
       items,
-      methodology: "Luôn quét top 100 cặp theo quote volume 24h; xếp hạng bằng xu hướng 15m/1h, RSI, volume, ATR và funding.",
+      methodology: "Quét top 100 cặp theo volume 24h; chỉ hiển thị coin có RSI < 15 ở ít nhất một khung 15m, 1h hoặc 4h.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {

@@ -42,7 +42,9 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   assert.match(watchlistRoute, /TOP_VOLUME_LIMIT = 100/);
   assert.match(watchlistRoute, /BATCH_SIZE = 25/);
   assert.match(watchlistRoute, /Number\(right\.quoteVolume\) - Number\(left\.quoteVolume\)/);
-  assert.match(watchlistRoute, /aggregateTo1h/);
+  assert.match(watchlistRoute, /aggregateCandles\(candles15m, 14_400_000\)/);
+  assert.match(watchlistRoute, /value < 15/);
+  assert.match(watchlistRoute, /oversoldFrames\.length/);
   assert.match(watchlistRoute, /trend15m \* 0\.36/);
   assert.match(analyzer, /patternWindow = 30/);
   assert.match(analyzer, /forwardBars = 12/);
@@ -55,7 +57,8 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   assert.match(terminal, /onClick=\{\(\) => selectSymbol\(coin\.symbol\)\}/);
   assert.match(terminal, /COIN_OPTIONS\[market\]/);
   assert.match(terminal, /WATCHLIST_REFRESH_MS = 90_000/);
-  assert.match(terminal, /top volume 24h/);
+  assert.match(terminal, /Top coin RSI/);
+  assert.match(terminal, /RSI thấp nhất/);
   assert.ok(catalog.futures.length > 500);
   assert.ok(catalog.spot.length > 450);
   assert.ok(catalog.futures.includes("SOLUSDT"));

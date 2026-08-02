@@ -334,17 +334,23 @@ export function MarketTerminal() {
         const first = batches[0];
         const universeSize = Math.max(...batches.map((batch) => batch.universeSize));
         const successfulScans = batches.reduce((total, batch) => total + batch.successfulScans, 0);
+        const matchedCount = batches.reduce((total, batch) => total + batch.matchedCount, 0);
         setWatchlist({
           ...first,
           generatedAt: Math.max(...batches.map((batch) => batch.generatedAt)),
           scanned: universeSize,
           successfulScans,
+          matchedCount,
           universeSize,
           batch: 0,
           batchCount: WATCHLIST_BATCH_COUNT,
           refreshIntervalMs: WATCHLIST_REFRESH_MS,
           items: [...uniqueItems.values()]
-            .sort((left, right) => right.score - left.score || Math.abs(right.change24h) - Math.abs(left.change24h))
+            .sort((left, right) =>
+              right.oversoldFrames.length - left.oversoldFrames.length ||
+              left.lowestRsi - right.lowestRsi ||
+              right.quoteVolume24h - left.quoteVolume24h,
+            )
             .slice(0, 8),
         });
         if (batches.length < WATCHLIST_BATCH_COUNT) {
@@ -549,12 +555,12 @@ export function MarketTerminal() {
             <div className="panel-header watchlist-header">
               <div className="watchlist-title">
                 <span className="watchlist-icon"><Radar size={17} /></span>
-                <div><span className="eyebrow">MARKET SCANNER</span><h2>Coin cần theo dõi</h2></div>
+                <div><span className="eyebrow">RSI OVERSOLD SCANNER</span><h2>Top coin RSI &lt; 15</h2></div>
               </div>
               <div className="watchlist-actions">
                 {watchlist
-                  ? <span>{watchlist.successfulScans}/{watchlist.universeSize} cặp · top volume 24h · {formatTime(watchlist.generatedAt)}</span>
-                  : <span>Đang quét top 100 theo volume 24h</span>}
+                  ? <span>{watchlist.successfulScans}/{watchlist.universeSize} đã quét · {watchlist.matchedCount} coin đạt ngưỡng · {formatTime(watchlist.generatedAt)}</span>
+                  : <span>Đang tìm RSI &lt; 15 trong top 100 volume</span>}
                 <button
                   type="button"
                   aria-label="Quét lại danh sách coin"
@@ -567,25 +573,26 @@ export function MarketTerminal() {
             </div>
             {watchlistError && !watchlist ? (
               <div className="watchlist-error"><AlertTriangle size={15} /><span>{watchlistError}</span><button onClick={() => setWatchlistKey((key) => key + 1)}>Thử lại</button></div>
+            ) : watchlist && !watchlist.items.length ? (
+              <div className="watchlist-empty"><Gauge size={18} /><span><b>Chưa có coin RSI dưới 15</b>Top 100 volume hiện không có cặp nào đạt ngưỡng ở khung 15m, 1h hoặc 4h.</span></div>
             ) : (
               <div className={watchlistLoading ? "watchlist-cards loading" : "watchlist-cards"}>
                 {watchlist ? watchlist.items.slice(0, 6).map((item, index) => {
-                  const itemClass = item.signal === "LONG" ? "positive" : item.signal === "SHORT" ? "negative" : "neutral";
+                  const itemClass = "neutral";
                   return (
                     <button
                       type="button"
                       className={`watch-card ${itemClass} ${symbol === item.symbol ? "active" : ""}`}
                       key={item.symbol}
                       onClick={() => selectSymbol(item.symbol)}
-                      aria-label={`Phân tích ${item.ticker}, điểm theo dõi ${item.score}`}
+                      aria-label={`Phân tích ${item.ticker}, RSI thấp nhất ${item.lowestRsi}`}
                     >
                       <span className="watch-rank">#{index + 1}</span>
                       <span className={`watch-signal ${itemClass}`}>
-                        {item.signal === "LONG" ? <TrendingUp size={12} /> : item.signal === "SHORT" ? <TrendingDown size={12} /> : <Gauge size={12} />}
-                        {item.signal}
+                        <Gauge size={12} /> {item.oversoldFrames.join(" · ")}
                       </span>
                       <span className="watch-coin"><i>{item.ticker.slice(0, 1)}</i><b>{item.ticker}<small>/USDT</small></b></span>
-                      <span className="watch-score"><strong>{item.score}</strong><small>điểm</small></span>
+                      <span className="watch-score"><strong>{item.lowestRsi}</strong><small>RSI thấp</small></span>
                       <span className="watch-price">{formatPrice(item.price)}<em className={item.change24h >= 0 ? "positive-text" : "negative-text"}>{item.change24h >= 0 ? "+" : ""}{item.change24h}%</em></span>
                       <span className="watch-reason">{item.reasons[0]}</span>
                       <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
@@ -595,7 +602,7 @@ export function MarketTerminal() {
               </div>
             )}
             <div className="watchlist-foot">
-              <span><CircleDot size={11} /> {watchlist?.methodology || "Đang quét top 100 cặp có volume 24h lớn nhất trên Binance."} Tự quét lại mỗi 90 giây.</span>
+              <span><CircleDot size={11} /> {watchlist?.methodology || "Đang tìm coin RSI < 15 trên các khung 15m, 1h và 4h."} Tự quét lại mỗi 90 giây.</span>
               {watchlistError && watchlist ? <em><AlertTriangle size={11} /> Dữ liệu cũ đang được giữ lại</em> : null}
             </div>
           </section>
