@@ -4,7 +4,7 @@ import type { Candle, MarketType, Signal, WatchlistItem, WatchlistResponse } fro
 
 const FUTURES_BASE = "https://fapi.binance.com";
 const SPOT_BASE = "https://data-api.binance.vision";
-const TOP_VOLUME_LIMIT = 100;
+const TOP_VOLUME_LIMIT = 200;
 const BATCH_SIZE = 15;
 const SCAN_CONCURRENCY = 3;
 const RSI_HISTORY_LIMIT = 200;
@@ -317,7 +317,7 @@ export async function GET(request: Request) {
       batchCount,
       refreshIntervalMs: CACHE_TTL_MS,
       items,
-      methodology: "Quét top 100 volume 24h bằng RSI(12) Wilder/RMA trên 200 nến riêng cho từng khung 15m, 1h và 4h; ngưỡng hiển thị < 15.",
+      methodology: "Quét top 200 volume 24h bằng RSI(12) Wilder/RMA trên 200 nến riêng cho từng khung 15m, 1h và 4h; ngưỡng hiển thị < 15.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {

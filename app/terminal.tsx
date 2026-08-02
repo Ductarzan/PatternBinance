@@ -34,7 +34,7 @@ import symbolCatalog from "../lib/binance-usdt-symbols.json";
 import type { AiExplanation, Candle, MarketAnalysis, MarketType, WatchlistResponse } from "../lib/market-types";
 
 const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
-const WATCHLIST_BATCH_COUNT = 7;
+const WATCHLIST_BATCH_COUNT = 14;
 const WATCHLIST_REQUEST_CONCURRENCY = 2;
 const WATCHLIST_REFRESH_MS = 90_000;
 const KNOWN_COIN_NAMES: Record<string, string> = {
@@ -337,7 +337,7 @@ export function MarketTerminal() {
           .map((result) => result.value);
         if (!batches.length) {
           const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
-          throw failed?.reason instanceof Error ? failed.reason : new Error("Không thể quét top 100 coin.");
+          throw failed?.reason instanceof Error ? failed.reason : new Error("Không thể quét top 200 coin.");
         }
         const uniqueItems = new Map(batches.flatMap((batch) => batch.items).map((item) => [item.symbol, item]));
         const first = batches[0];
@@ -569,7 +569,7 @@ export function MarketTerminal() {
               <div className="watchlist-actions">
                 {watchlist
                   ? <span>{watchlist.successfulScans}/{watchlist.universeSize} đã quét · {watchlist.matchedCount} coin đạt ngưỡng · {formatTime(watchlist.generatedAt)}</span>
-                  : <span>Đang tìm RSI &lt; 15 trong top 100 volume</span>}
+                  : <span>Đang tìm RSI &lt; 15 trong top 200 volume</span>}
                 <button
                   type="button"
                   aria-label="Quét lại danh sách coin"
@@ -583,7 +583,7 @@ export function MarketTerminal() {
             {watchlistError && !watchlist ? (
               <div className="watchlist-error"><AlertTriangle size={15} /><span>{watchlistError}</span><button onClick={() => setWatchlistKey((key) => key + 1)}>Thử lại</button></div>
             ) : watchlist && !watchlist.items.length ? (
-              <div className="watchlist-empty"><Gauge size={18} /><span><b>Chưa có coin RSI dưới 15</b>Top 100 volume hiện không có cặp nào đạt ngưỡng ở khung 15m, 1h hoặc 4h.</span></div>
+              <div className="watchlist-empty"><Gauge size={18} /><span><b>Chưa có coin RSI dưới 15</b>Top 200 volume hiện không có cặp nào đạt ngưỡng ở khung 15m, 1h hoặc 4h.</span></div>
             ) : (
               <div className={watchlistLoading ? "watchlist-cards loading" : "watchlist-cards"}>
                 {watchlist ? watchlist.items.slice(0, 6).map((item, index) => {

@@ -39,7 +39,7 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   const catalog = JSON.parse(catalogText);
 
   assert.match(marketRoute, /fetchKlines\(market, symbol, "15m", 5000\)/);
-  assert.match(watchlistRoute, /TOP_VOLUME_LIMIT = 100/);
+  assert.match(watchlistRoute, /TOP_VOLUME_LIMIT = 200/);
   assert.match(watchlistRoute, /BATCH_SIZE = 15/);
   assert.match(watchlistRoute, /RSI_HISTORY_LIMIT = 200/);
   assert.match(watchlistRoute, /RSI_PERIOD = 12/);
