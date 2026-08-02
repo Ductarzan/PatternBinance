@@ -43,10 +43,11 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   assert.match(watchlistRoute, /BATCH_SIZE = 15/);
   assert.match(watchlistRoute, /RSI_HISTORY_LIMIT = 200/);
   assert.match(watchlistRoute, /RSI_PERIOD = 12/);
+  assert.match(watchlistRoute, /RSI_OVERSOLD_THRESHOLD = 20/);
   assert.match(watchlistRoute, /Number\(right\.quoteVolume\) - Number\(left\.quoteVolume\)/);
   assert.match(watchlistRoute, /fetchKlines\(market, symbol, "4h", RSI_HISTORY_LIMIT\)/);
   assert.match(watchlistRoute, /averageGain \* \(period - 1\)/);
-  assert.match(watchlistRoute, /value < 15/);
+  assert.match(watchlistRoute, /value < RSI_OVERSOLD_THRESHOLD/);
   assert.match(watchlistRoute, /oversoldFrames\.length/);
   assert.match(watchlistRoute, /trend15m \* 0\.36/);
   assert.match(analyzer, /patternWindow = 30/);

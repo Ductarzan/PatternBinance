@@ -9,6 +9,7 @@ const BATCH_SIZE = 15;
 const SCAN_CONCURRENCY = 3;
 const RSI_HISTORY_LIMIT = 200;
 const RSI_PERIOD = 12;
+const RSI_OVERSOLD_THRESHOLD = 20;
 const CACHE_TTL_MS = 90_000;
 
 const cache = new Map<string, { expires: number; data: WatchlistResponse }>();
@@ -194,7 +195,7 @@ function scoreCoin(input: {
   const rsi4h = rsi(candles4h);
   const rsiByFrame = { "15m": rsi15m, "1h": rsi1h, "4h": rsi4h };
   const oversoldFrames = (Object.entries(rsiByFrame) as Array<["15m" | "1h" | "4h", number]>)
-    .filter(([, value]) => value < 15)
+    .filter(([, value]) => value < RSI_OVERSOLD_THRESHOLD)
     .map(([frame]) => frame);
   const lowestRsi = Math.min(rsi15m, rsi1h, rsi4h);
   const momentum15m = rsi15m > 55 ? 1 : rsi15m < 45 ? -1 : 0;
@@ -317,7 +318,7 @@ export async function GET(request: Request) {
       batchCount,
       refreshIntervalMs: CACHE_TTL_MS,
       items,
-      methodology: "Quét top 200 volume 24h bằng RSI(12) Wilder/RMA trên 200 nến riêng cho từng khung 15m, 1h và 4h; ngưỡng hiển thị < 15.",
+      methodology: "Quét top 200 volume 24h bằng RSI(12) Wilder/RMA trên 200 nến riêng cho từng khung 15m, 1h và 4h; ngưỡng hiển thị < 20.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {
