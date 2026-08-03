@@ -10,6 +10,7 @@ const SCAN_CONCURRENCY = 3;
 const RSI_HISTORY_LIMIT = 200;
 const RSI_PERIOD = 7;
 const RSI_OVERSOLD_THRESHOLD = 20;
+const RSI_OVERBOUGHT_THRESHOLD = 90;
 const CACHE_TTL_MS = 90_000;
 
 const cache = new Map<string, { expires: number; data: WatchlistResponse }>();
@@ -197,7 +198,11 @@ function scoreCoin(input: {
   const oversoldFrames = (Object.entries(rsiByFrame) as Array<["15m" | "1h" | "4h", number]>)
     .filter(([, value]) => value < RSI_OVERSOLD_THRESHOLD)
     .map(([frame]) => frame);
+  const overboughtFrames = (Object.entries(rsiByFrame) as Array<["15m" | "1h" | "4h", number]>)
+    .filter(([, value]) => value > RSI_OVERBOUGHT_THRESHOLD)
+    .map(([frame]) => frame);
   const lowestRsi = Math.min(rsi15m, rsi1h, rsi4h);
+  const highestRsi = Math.max(rsi15m, rsi1h, rsi4h);
   const momentum15m = rsi15m > 55 ? 1 : rsi15m < 45 ? -1 : 0;
   const momentum1h = rsi1h > 55 ? 1 : rsi1h < 45 ? -1 : 0;
   const momentumDirection = (momentum15m + momentum1h) / 2;
@@ -250,7 +255,9 @@ function scoreCoin(input: {
     rsi1h: round(rsi1h, 1),
     rsi4h: round(rsi4h, 1),
     lowestRsi: round(lowestRsi, 1),
+    highestRsi: round(highestRsi, 1),
     oversoldFrames,
+    overboughtFrames,
     atrPercent: round(volatility, 2),
     volumeRatio: round(volumeRatio, 2),
     fundingRate,
@@ -305,6 +312,13 @@ export async function GET(request: Request) {
         left.lowestRsi - right.lowestRsi ||
         right.quoteVolume24h - left.quoteVolume24h,
       );
+    const overboughtItems = successfulItems
+      .filter((item) => item.overboughtFrames.length > 0)
+      .sort((left, right) =>
+        right.overboughtFrames.length - left.overboughtFrames.length ||
+        right.highestRsi - left.highestRsi ||
+        right.quoteVolume24h - left.quoteVolume24h,
+      );
 
     if (!successfulItems.length) throw new Error("Không có đủ dữ liệu để quét RSI watchlist.");
     const data: WatchlistResponse = {
@@ -313,12 +327,15 @@ export async function GET(request: Request) {
       scanned: batchTickers.length,
       successfulScans: successfulItems.length,
       matchedCount: items.length,
+      overboughtMatchedCount: overboughtItems.length,
       universeSize: topTickers.length,
       batch,
       batchCount,
       refreshIntervalMs: CACHE_TTL_MS,
       items,
+      overboughtItems,
       methodology: "Quét top 200 volume 24h bằng RSI(7) Wilder/RMA trên 200 nến riêng cho từng khung 15m, 1h và 4h, bao gồm nến đang chạy; ngưỡng hiển thị < 20.",
+      overboughtMethodology: "Quét top 200 volume 24h bằng RSI(7) Wilder/RMA trên 200 nến riêng cho từng khung 15m, 1h và 4h, bao gồm nến đang chạy; ngưỡng hiển thị > 90.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {

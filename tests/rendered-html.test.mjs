@@ -44,12 +44,15 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   assert.match(watchlistRoute, /RSI_HISTORY_LIMIT = 200/);
   assert.match(watchlistRoute, /RSI_PERIOD = 7/);
   assert.match(watchlistRoute, /RSI_OVERSOLD_THRESHOLD = 20/);
+  assert.match(watchlistRoute, /RSI_OVERBOUGHT_THRESHOLD = 90/);
   assert.match(watchlistRoute, /Number\(right\.quoteVolume\) - Number\(left\.quoteVolume\)/);
   assert.match(watchlistRoute, /fetchKlines\(market, symbol, "4h", RSI_HISTORY_LIMIT\)/);
   assert.match(watchlistRoute, /averageGain \* \(period - 1\)/);
   assert.match(watchlistRoute, /value < RSI_OVERSOLD_THRESHOLD/);
+  assert.match(watchlistRoute, /value > RSI_OVERBOUGHT_THRESHOLD/);
   assert.match(watchlistRoute, /bao gồm nến đang chạy/);
   assert.match(watchlistRoute, /oversoldFrames\.length/);
+  assert.match(watchlistRoute, /overboughtFrames\.length/);
   assert.match(watchlistRoute, /trend15m \* 0\.36/);
   assert.match(analyzer, /patternWindow = 30/);
   assert.match(analyzer, /forwardBars = 12/);
@@ -65,6 +68,7 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   assert.match(terminal, /WATCHLIST_REQUEST_CONCURRENCY = 2/);
   assert.match(terminal, /Top coin RSI/);
   assert.match(terminal, /RSI\(7\) thấp nhất/);
+  assert.match(terminal, /RSI OVERBOUGHT SCANNER/);
   assert.ok(catalog.futures.length > 500);
   assert.ok(catalog.spot.length > 450);
   assert.ok(catalog.futures.includes("SOLUSDT"));

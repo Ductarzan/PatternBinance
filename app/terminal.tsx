@@ -340,16 +340,22 @@ export function MarketTerminal() {
           throw failed?.reason instanceof Error ? failed.reason : new Error("Không thể quét top 200 coin.");
         }
         const uniqueItems = new Map(batches.flatMap((batch) => batch.items).map((item) => [item.symbol, item]));
+        const uniqueOverboughtItems = new Map(batches.flatMap((batch) => batch.overboughtItems ?? []).map((item) => [item.symbol, item]));
         const first = batches[0];
         const universeSize = Math.max(...batches.map((batch) => batch.universeSize));
         const successfulScans = batches.reduce((total, batch) => total + batch.successfulScans, 0);
         const matchedCount = batches.reduce((total, batch) => total + batch.matchedCount, 0);
+        const overboughtMatchedCount = batches.reduce(
+          (total, batch) => total + (batch.overboughtMatchedCount ?? batch.overboughtItems?.length ?? 0),
+          0,
+        );
         setWatchlist({
           ...first,
           generatedAt: Math.max(...batches.map((batch) => batch.generatedAt)),
           scanned: universeSize,
           successfulScans,
           matchedCount,
+          overboughtMatchedCount,
           universeSize,
           batch: 0,
           batchCount: WATCHLIST_BATCH_COUNT,
@@ -358,6 +364,13 @@ export function MarketTerminal() {
             .sort((left, right) =>
               right.oversoldFrames.length - left.oversoldFrames.length ||
               left.lowestRsi - right.lowestRsi ||
+              right.quoteVolume24h - left.quoteVolume24h,
+            )
+            .slice(0, 8),
+          overboughtItems: [...uniqueOverboughtItems.values()]
+            .sort((left, right) =>
+              right.overboughtFrames.length - left.overboughtFrames.length ||
+              right.highestRsi - left.highestRsi ||
               right.quoteVolume24h - left.quoteVolume24h,
             )
             .slice(0, 8),
@@ -612,6 +625,59 @@ export function MarketTerminal() {
             )}
             <div className="watchlist-foot">
               <span><CircleDot size={11} /> {watchlist?.methodology || "Đang tìm coin RSI(7) < 20 trên các khung 15m, 1h và 4h, bao gồm nến đang chạy."} Tự quét lại mỗi 90 giây.</span>
+              {watchlistError && watchlist ? <em><AlertTriangle size={11} /> Dữ liệu cũ đang được giữ lại</em> : null}
+            </div>
+          </section>
+
+          <section className="watchlist-panel overbought-panel panel">
+            <div className="panel-header watchlist-header">
+              <div className="watchlist-title">
+                <span className="watchlist-icon"><TrendingUp size={17} /></span>
+                <div><span className="eyebrow">RSI OVERBOUGHT SCANNER</span><h2>Top coin RSI(7) &gt; 90</h2></div>
+              </div>
+              <div className="watchlist-actions">
+                {watchlist
+                  ? <span>{watchlist.successfulScans}/{watchlist.universeSize} đã quét · {watchlist.overboughtMatchedCount} coin đạt ngưỡng · {formatTime(watchlist.generatedAt)}</span>
+                  : <span>Đang tìm RSI(7) &gt; 90 trong top 200 volume</span>}
+                <button
+                  type="button"
+                  aria-label="Quét lại danh sách coin quá mua"
+                  onClick={() => setWatchlistKey((key) => key + 1)}
+                  disabled={watchlistLoading}
+                >
+                  <RefreshCw size={14} className={watchlistLoading ? "spinning" : ""} />
+                </button>
+              </div>
+            </div>
+            {watchlistError && !watchlist ? (
+              <div className="watchlist-error"><AlertTriangle size={15} /><span>{watchlistError}</span><button onClick={() => setWatchlistKey((key) => key + 1)}>Thử lại</button></div>
+            ) : watchlist && !watchlist.overboughtItems.length ? (
+              <div className="watchlist-empty"><Gauge size={18} /><span><b>Chưa có coin RSI(7) trên 90</b>Top 200 volume hiện không có cặp nào đạt ngưỡng ở khung 15m, 1h hoặc 4h.</span></div>
+            ) : (
+              <div className={watchlistLoading ? "watchlist-cards loading" : "watchlist-cards"}>
+                {watchlist ? watchlist.overboughtItems.slice(0, 6).map((item, index) => (
+                  <button
+                    type="button"
+                    className={`watch-card negative ${symbol === item.symbol ? "active" : ""}`}
+                    key={item.symbol}
+                    onClick={() => selectSymbol(item.symbol)}
+                    aria-label={`Phân tích ${item.ticker}, RSI(7) cao nhất ${item.highestRsi}`}
+                  >
+                    <span className="watch-rank">#{index + 1}</span>
+                    <span className="watch-signal negative">
+                      <TrendingUp size={12} /> {item.overboughtFrames.join(" · ")}
+                    </span>
+                    <span className="watch-coin"><i>{item.ticker.slice(0, 1)}</i><b>{item.ticker}<small>/USDT</small></b></span>
+                    <span className="watch-score"><strong>{item.highestRsi}</strong><small>RSI(7) cao</small></span>
+                    <span className="watch-price">{formatPrice(item.price)}<em className={item.change24h >= 0 ? "positive-text" : "negative-text"}>{item.change24h >= 0 ? "+" : ""}{item.change24h}%</em></span>
+                    <span className="watch-reason">15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</span>
+                    <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
+                  </button>
+                )) : Array.from({ length: 6 }, (_, index) => <div className="watch-card-skeleton" key={index} />)}
+              </div>
+            )}
+            <div className="watchlist-foot">
+              <span><CircleDot size={11} /> {watchlist?.overboughtMethodology || "Đang tìm coin RSI(7) > 90 trên các khung 15m, 1h và 4h, bao gồm nến đang chạy."} Tự quét lại mỗi 90 giây.</span>
               {watchlistError && watchlist ? <em><AlertTriangle size={11} /> Dữ liệu cũ đang được giữ lại</em> : null}
             </div>
           </section>

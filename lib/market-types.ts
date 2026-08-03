@@ -117,7 +117,9 @@ export type WatchlistItem = {
   rsi1h: number;
   rsi4h: number;
   lowestRsi: number;
+  highestRsi: number;
   oversoldFrames: Array<"15m" | "1h" | "4h">;
+  overboughtFrames: Array<"15m" | "1h" | "4h">;
   atrPercent: number;
   volumeRatio: number;
   fundingRate: number | null;
@@ -130,10 +132,13 @@ export type WatchlistResponse = {
   scanned: number;
   successfulScans: number;
   matchedCount: number;
+  overboughtMatchedCount: number;
   universeSize: number;
   batch: number;
   batchCount: number;
   refreshIntervalMs: number;
   items: WatchlistItem[];
+  overboughtItems: WatchlistItem[];
   methodology: string;
+  overboughtMethodology: string;
 };
