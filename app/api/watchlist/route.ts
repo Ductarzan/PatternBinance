@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import symbolCatalog from "../../../lib/binance-usdt-symbols.json";
-import type { Candle, MarketType, RsiDivergence, Signal, WatchlistItem, WatchlistResponse } from "../../../lib/market-types";
+import type {
+  Candle,
+  MarketType,
+  ReversalReadiness,
+  ReversalSignal,
+  RsiDivergence,
+  Signal,
+  WatchlistItem,
+  WatchlistResponse,
+} from "../../../lib/market-types";
 
 const FUTURES_BASE = "https://fapi.binance.com";
 const SPOT_BASE = "https://data-api.binance.vision";
@@ -15,6 +24,11 @@ const DIVERGENCE_LOOKBACK = 80;
 const DIVERGENCE_PIVOT_WINDOW = 2;
 const DIVERGENCE_RECENT_BARS = 5;
 const DIVERGENCE_MIN_GAP = 3;
+const REVERSAL_SLOPE_BARS = 3;
+const REVERSAL_VOLUME_BASELINE = 20;
+const REVERSAL_STRUCTURE_LOOKBACK = 10;
+const REVERSAL_READY_SCORE = 65;
+const REVERSAL_FORMING_SCORE = 40;
 const CACHE_TTL_MS = 90_000;
 
 const cache = new Map<string, { expires: number; data: WatchlistResponse }>();
@@ -207,16 +221,239 @@ function findRsiDivergence(
     const priceConfirms = kind === "bullish" ? currentPrice < candlePrice : currentPrice > candlePrice;
     const rsiConfirms = kind === "bullish" ? currentRsi > values[index] : currentRsi < values[index];
     if (priceConfirms && rsiConfirms) {
+      const rsiGap = Math.abs(currentRsi - values[index]);
+      const priceGapPercent = candlePrice
+        ? Math.abs((currentPrice - candlePrice) / candlePrice) * 100
+        : 0;
+      const barsApart = currentIndex - index;
+      const strength = Math.round(clamp(
+        clamp(rsiGap / 12) * 55 +
+          clamp(priceGapPercent / 4) * 25 +
+          clamp((barsApart - DIVERGENCE_MIN_GAP) / 25) * 20,
+        0,
+        1,
+      ) * 100);
       return {
         frame,
         previousPrice: candlePrice,
         currentPrice,
         previousRsi: round(values[index], 1),
         currentRsi: round(currentRsi, 1),
+        barsApart,
+        rsiGap: round(rsiGap, 1),
+        priceGapPercent: round(priceGapPercent, 2),
+        strength,
       };
     }
   }
   return null;
+}
+
+function detectReversalCandle(candles: Candle[], kind: "bullish" | "bearish") {
+  const last = candles.at(-1);
+  const previous = candles.at(-2);
+  if (!last || !previous) return null;
+  const range = last.high - last.low;
+  if (range <= 0) return null;
+  const body = Math.abs(last.close - last.open);
+  const upperWick = last.high - Math.max(last.close, last.open);
+  const lowerWick = Math.min(last.close, last.open) - last.low;
+  const previousBody = Math.abs(previous.close - previous.open);
+  const previousBearish = previous.close < previous.open;
+  const previousBullish = previous.close > previous.open;
+
+  if (kind === "bullish") {
+    if (last.close > last.open && previousBearish && last.close >= previous.open && last.open <= previous.close && body > previousBody * 0.9) {
+      return "Nến nhấn chìm tăng";
+    }
+    if (lowerWick >= body * 2 && lowerWick / range >= 0.5 && upperWick / range <= 0.25) {
+      return "Nến búa (bóng dưới dài)";
+    }
+    if (last.close > last.open && body / range <= 0.25 && lowerWick / range >= 0.35) {
+      return "Doji chân dài đáy";
+    }
+    if (previousBearish && last.close > last.open && last.close > (previous.open + previous.close) / 2) {
+      return "Nến xuyên thấu (piercing)";
+    }
+    return null;
+  }
+
+  if (last.close < last.open && previousBullish && last.close <= previous.open && last.open >= previous.close && body > previousBody * 0.9) {
+    return "Nến nhấn chìm giảm";
+  }
+  if (upperWick >= body * 2 && upperWick / range >= 0.5 && lowerWick / range <= 0.25) {
+    return "Nến sao băng (bóng trên dài)";
+  }
+  if (last.close < last.open && body / range <= 0.25 && upperWick / range >= 0.35) {
+    return "Doji chân dài đỉnh";
+  }
+  if (previousBullish && last.close < last.open && last.close < (previous.open + previous.close) / 2) {
+    return "Nến mây đen che phủ";
+  }
+  return null;
+}
+
+function assessReversal(input: {
+  candles: Candle[];
+  frame: RsiDivergence["frame"];
+  kind: "bullish" | "bearish";
+  divergences: RsiDivergence[];
+}): ReversalReadiness {
+  const { candles, kind, divergences } = input;
+  const empty: ReversalReadiness = {
+    direction: "none",
+    score: 0,
+    stage: "Chưa có",
+    signals: [],
+    candlePattern: null,
+    rsiSlope: 0,
+    volumeSpike: 0,
+  };
+  if (candles.length <= RSI_PERIOD + REVERSAL_SLOPE_BARS) return empty;
+
+  const bullish = kind === "bullish";
+  const values = rsiSeries(candles);
+  const currentRsi = values.at(-1) ?? 50;
+  const pastRsi = values.at(-1 - REVERSAL_SLOPE_BARS) ?? currentRsi;
+  const troughRsi = bullish
+    ? Math.min(...values.slice(-REVERSAL_SLOPE_BARS - 1))
+    : Math.max(...values.slice(-REVERSAL_SLOPE_BARS - 1));
+  const rsiSlope = currentRsi - pastRsi;
+  const signals: ReversalSignal[] = [];
+
+  if (divergences.length) {
+    const best = divergences.reduce((left, right) => (right.strength > left.strength ? right : left));
+    signals.push({
+      key: "divergence",
+      label: bullish ? "Phân kỳ tăng" : "Phân kỳ giảm",
+      detail: `${best.frame} · RSI lệch ${best.rsiGap} điểm qua ${best.barsApart} nến`,
+      weight: 18 + Math.round((best.strength / 100) * 10),
+    });
+  }
+  if (divergences.length >= 2) {
+    signals.push({
+      key: "multiFrameDivergence",
+      label: "Phân kỳ đa khung",
+      detail: divergences.map((item) => item.frame).join(" · "),
+      weight: 12,
+    });
+  }
+
+  const turnAmount = bullish ? currentRsi - troughRsi : troughRsi - currentRsi;
+  if (turnAmount >= 2 && (bullish ? rsiSlope > 0 : rsiSlope < 0)) {
+    signals.push({
+      key: "rsiTurn",
+      label: bullish ? "RSI bẻ lên khỏi đáy" : "RSI bẻ xuống khỏi đỉnh",
+      detail: `RSI ${round(troughRsi, 1)} → ${round(currentRsi, 1)}`,
+      weight: Math.min(20, 8 + Math.round(turnAmount)),
+    });
+  }
+
+  const exitedExtreme = bullish
+    ? currentRsi >= RSI_OVERSOLD_THRESHOLD && troughRsi < RSI_OVERSOLD_THRESHOLD
+    : currentRsi <= RSI_OVERBOUGHT_THRESHOLD && troughRsi > RSI_OVERBOUGHT_THRESHOLD;
+  if (exitedExtreme) {
+    signals.push({
+      key: "rsiExitExtreme",
+      label: bullish ? "RSI thoát vùng quá bán" : "RSI thoát vùng quá mua",
+      detail: `RSI(7) hiện ${round(currentRsi, 1)}`,
+      weight: 10,
+    });
+  }
+
+  const candlePattern = detectReversalCandle(candles, kind);
+  if (candlePattern) {
+    signals.push({
+      key: "reversalCandle",
+      label: candlePattern,
+      detail: "Nến gần nhất xác nhận lực đảo chiều",
+      weight: 16,
+    });
+  }
+
+  const lastVolume = candles.at(-1)?.volume ?? 0;
+  const baselineVolume = average(
+    candles.slice(-REVERSAL_VOLUME_BASELINE - 1, -1).map((candle) => candle.volume),
+  ) || 1;
+  const volumeSpike = lastVolume / baselineVolume;
+  if (volumeSpike >= 1.6) {
+    signals.push({
+      key: "volumeClimax",
+      label: "Volume climax",
+      detail: `Volume ${round(volumeSpike, 2)}× trung bình ${REVERSAL_VOLUME_BASELINE} nến`,
+      weight: volumeSpike >= 2.5 ? 14 : 9,
+    });
+  }
+
+  const last = candles.at(-1);
+  if (last) {
+    const range = last.high - last.low;
+    const wick = bullish
+      ? Math.min(last.close, last.open) - last.low
+      : last.high - Math.max(last.close, last.open);
+    if (range > 0 && wick / range >= 0.45 && candlePattern === null) {
+      signals.push({
+        key: "rejectionWick",
+        label: bullish ? "Bóng nến từ chối đáy" : "Bóng nến từ chối đỉnh",
+        detail: `Bóng chiếm ${Math.round((wick / range) * 100)}% biên độ nến`,
+        weight: 8,
+      });
+    }
+  }
+
+  const closes = candles.map((candle) => candle.close);
+  const ema20 = ema(closes, 20);
+  const currentClose = closes.at(-1) ?? 0;
+  const previousClose = closes.at(-2) ?? currentClose;
+  const reclaimed = bullish
+    ? previousClose < ema20 && currentClose >= ema20
+    : previousClose > ema20 && currentClose <= ema20;
+  if (reclaimed) {
+    signals.push({
+      key: "emaReclaim",
+      label: bullish ? "Giá lấy lại EMA20" : "Giá mất EMA20",
+      detail: `EMA20 ${round(ema20, 6)}`,
+      weight: 11,
+    });
+  }
+
+  const structureWindow = candles.slice(-REVERSAL_STRUCTURE_LOOKBACK - 1, -1);
+  if (structureWindow.length) {
+    const swingHigh = Math.max(...structureWindow.map((candle) => candle.high));
+    const swingLow = Math.min(...structureWindow.map((candle) => candle.low));
+    const broke = bullish ? currentClose > swingHigh : currentClose < swingLow;
+    if (broke) {
+      signals.push({
+        key: "structureBreak",
+        label: bullish ? "Phá swing high gần nhất" : "Phá swing low gần nhất",
+        detail: `Mốc ${round(bullish ? swingHigh : swingLow, 6)} trong ${REVERSAL_STRUCTURE_LOOKBACK} nến`,
+        weight: 12,
+      });
+    }
+  }
+
+  if (!signals.length) return { ...empty, rsiSlope: round(rsiSlope, 1), volumeSpike: round(volumeSpike, 2) };
+
+  const score = Math.round(clamp(
+    signals.reduce((sum, signal) => sum + signal.weight, 0),
+    0,
+    100,
+  ));
+  const stage = score >= REVERSAL_READY_SCORE
+    ? "Sắp đảo chiều"
+    : score >= REVERSAL_FORMING_SCORE
+      ? "Đang hình thành"
+      : "Yếu";
+
+  return {
+    direction: kind,
+    score,
+    stage,
+    signals: signals.sort((left, right) => right.weight - left.weight),
+    candlePattern,
+    rsiSlope: round(rsiSlope, 1),
+    volumeSpike: round(volumeSpike, 2),
+  };
 }
 
 function atrPercent(candles: Candle[], period = 14) {
@@ -284,6 +521,40 @@ function scoreCoin(input: {
     .filter((item): item is RsiDivergence => item !== null);
   const lowestRsi = Math.min(rsi15m, rsi1h, rsi4h);
   const highestRsi = Math.max(rsi15m, rsi1h, rsi4h);
+  const candlesByFrame = { "15m": candles15m, "1h": candles1h, "4h": candles4h };
+  const bullishFrame = oversoldFrames[0]
+    ?? (bullishDivergences[0]?.frame)
+    ?? (frameData.find(({ frame }) => rsiByFrame[frame] === lowestRsi)?.frame ?? "15m");
+  const bearishFrame = overboughtFrames[0]
+    ?? (bearishDivergences[0]?.frame)
+    ?? (frameData.find(({ frame }) => rsiByFrame[frame] === highestRsi)?.frame ?? "15m");
+  const bullishReversal = oversoldFrames.length
+    ? assessReversal({
+      candles: candlesByFrame[bullishFrame],
+      frame: bullishFrame,
+      kind: "bullish",
+      divergences: bullishDivergences,
+    })
+    : null;
+  const bearishReversal = overboughtFrames.length
+    ? assessReversal({
+      candles: candlesByFrame[bearishFrame],
+      frame: bearishFrame,
+      kind: "bearish",
+      divergences: bearishDivergences,
+    })
+    : null;
+  const reversal: ReversalReadiness = (bullishReversal?.score ?? 0) >= (bearishReversal?.score ?? 0)
+    ? bullishReversal ?? bearishReversal ?? {
+      direction: "none",
+      score: 0,
+      stage: "Chưa có",
+      signals: [],
+      candlePattern: null,
+      rsiSlope: 0,
+      volumeSpike: 0,
+    }
+    : bearishReversal!;
   const momentum15m = rsi15m > 55 ? 1 : rsi15m < 45 ? -1 : 0;
   const momentum1h = rsi1h > 55 ? 1 : rsi1h < 45 ? -1 : 0;
   const momentumDirection = (momentum15m + momentum1h) / 2;
@@ -323,6 +594,9 @@ function scoreCoin(input: {
   else if (trend15m || trend1h) reasons.push("Xu hướng đang hình thành, cần chờ thêm đồng thuận");
   else reasons.push("Giá đang nén quanh EMA20/50");
   if (volumeRatio >= 1) reasons.push(`Volume 15m đạt ${round(volumeRatio, 2)}× trung bình`);
+  if (reversal.score > 0) {
+    reasons.push(`Đảo chiều ${reversal.stage.toLowerCase()} (${reversal.score}/100): ${reversal.signals.map((item) => item.label).join(", ")}`);
+  }
 
   return {
     symbol,
@@ -341,6 +615,7 @@ function scoreCoin(input: {
     overboughtFrames,
     bullishDivergences,
     bearishDivergences,
+    reversal,
     atrPercent: round(volatility, 2),
     volumeRatio: round(volumeRatio, 2),
     fundingRate,
@@ -391,6 +666,7 @@ export async function GET(request: Request) {
     const items = successfulItems
       .filter((item) => item.oversoldFrames.length > 0)
       .sort((left, right) =>
+        right.reversal.score - left.reversal.score ||
         right.bullishDivergences.length - left.bullishDivergences.length ||
         right.oversoldFrames.length - left.oversoldFrames.length ||
         left.lowestRsi - right.lowestRsi ||
@@ -399,6 +675,7 @@ export async function GET(request: Request) {
     const overboughtItems = successfulItems
       .filter((item) => item.overboughtFrames.length > 0)
       .sort((left, right) =>
+        right.reversal.score - left.reversal.score ||
         right.bearishDivergences.length - left.bearishDivergences.length ||
         right.overboughtFrames.length - left.overboughtFrames.length ||
         right.highestRsi - left.highestRsi ||
@@ -419,8 +696,8 @@ export async function GET(request: Request) {
       refreshIntervalMs: CACHE_TTL_MS,
       items,
       overboughtItems,
-      methodology: "Bắt buộc RSI(7) < 20 trên 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn; bao gồm nến đang chạy.",
-      overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn; bao gồm nến đang chạy.",
+      methodology: "Bắt buộc RSI(7) < 20 trên 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ lên khỏi đáy, nến đảo chiều, volume climax, lấy lại EMA20 và phá swing high; bao gồm nến đang chạy.",
+      overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ xuống khỏi đỉnh, nến đảo chiều, volume climax, mất EMA20 và phá swing low; bao gồm nến đang chạy.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {

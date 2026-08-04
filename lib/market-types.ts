@@ -122,6 +122,7 @@ export type WatchlistItem = {
   overboughtFrames: Array<"15m" | "1h" | "4h">;
   bullishDivergences: RsiDivergence[];
   bearishDivergences: RsiDivergence[];
+  reversal: ReversalReadiness;
   atrPercent: number;
   volumeRatio: number;
   fundingRate: number | null;
@@ -134,6 +135,38 @@ export type RsiDivergence = {
   currentPrice: number;
   previousRsi: number;
   currentRsi: number;
+  barsApart: number;
+  rsiGap: number;
+  priceGapPercent: number;
+  strength: number;
+};
+
+export type ReversalSignalKey =
+  | "divergence"
+  | "multiFrameDivergence"
+  | "rsiTurn"
+  | "rsiExitExtreme"
+  | "reversalCandle"
+  | "volumeClimax"
+  | "rejectionWick"
+  | "emaReclaim"
+  | "structureBreak";
+
+export type ReversalSignal = {
+  key: ReversalSignalKey;
+  label: string;
+  detail: string;
+  weight: number;
+};
+
+export type ReversalReadiness = {
+  direction: "bullish" | "bearish" | "none";
+  score: number;
+  stage: "Sắp đảo chiều" | "Đang hình thành" | "Yếu" | "Chưa có";
+  signals: ReversalSignal[];
+  candlePattern: string | null;
+  rsiSlope: number;
+  volumeSpike: number;
 };
 
 export type WatchlistResponse = {

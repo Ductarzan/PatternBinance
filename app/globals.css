@@ -153,6 +153,26 @@ button { color: inherit; }
 .watch-price { margin-top: 11px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted-2); font: 600 9px var(--font-geist-mono); }
 .watch-price em { font: 600 8px var(--font-geist-mono); font-style: normal; }
 .watch-reason { height: 28px; margin-top: 9px; overflow: hidden; color: #717b89; font-size: 8px; line-height: 1.55; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.watch-reversal { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+.watch-reversal-head { display: flex; align-items: center; gap: 5px; color: #7b8593; font: 650 7px var(--font-geist-mono); }
+.watch-reversal-head b { font: 650 7.5px var(--font-geist-mono); letter-spacing: .02em; }
+.watch-reversal-head em { margin-left: auto; color: #626c7a; font: 600 7px var(--font-geist-mono); font-style: normal; }
+.watch-reversal-track { height: 3px; border-radius: 3px; background: rgba(255,255,255,.06); overflow: hidden; }
+.watch-reversal-track > i { display: block; height: 100%; border-radius: 3px; transition: width .3s ease; }
+.watch-reversal-tags { display: flex; flex-wrap: wrap; gap: 3px; max-height: 26px; overflow: hidden; }
+.watch-reversal-tags em { padding: 2px 4px; border-radius: 3px; background: rgba(255,255,255,.045); color: #8a94a2; font: 600 6.5px var(--font-geist-mono); font-style: normal; white-space: nowrap; }
+.watch-reversal.bullish .watch-reversal-head { color: var(--green); }
+.watch-reversal.bullish .watch-reversal-track > i { background: var(--green); }
+.watch-reversal.bullish .watch-reversal-tags em { background: rgba(19,199,132,.08); color: #6fbfa0; }
+.watch-reversal.bearish .watch-reversal-head { color: var(--red); }
+.watch-reversal.bearish .watch-reversal-track > i { background: var(--red); }
+.watch-reversal.bearish .watch-reversal-tags em { background: rgba(239,72,104,.08); color: #c88192; }
+.watch-reversal.forming .watch-reversal-head { color: var(--yellow); }
+.watch-reversal.forming .watch-reversal-track > i { background: var(--yellow); }
+.watch-reversal.weak { opacity: .62; }
+.watch-reversal.weak .watch-reversal-head { color: #737d8b; }
+.watch-reversal.weak .watch-reversal-track > i { background: #4d5764; }
+.watch-reversal.ready .watch-reversal-head b { text-shadow: 0 0 9px currentColor; }
 .watch-open { margin-top: auto; padding-top: 8px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line-soft); color: #8a94a2; font: 600 8px var(--font-geist-mono); }
 .watch-card:hover .watch-open { color: var(--yellow); }
 .watch-card-skeleton { min-height: 168px; border-right: 1px solid var(--line-soft); background: linear-gradient(100deg, rgba(23,28,36,.45) 25%, rgba(42,48,58,.45) 38%, rgba(23,28,36,.45) 52%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }

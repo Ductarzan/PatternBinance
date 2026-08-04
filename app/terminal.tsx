@@ -20,6 +20,7 @@ import {
   Radar,
   RefreshCw,
   Search,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
   Target,
@@ -31,7 +32,7 @@ import {
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import symbolCatalog from "../lib/binance-usdt-symbols.json";
-import type { AiExplanation, Candle, MarketAnalysis, MarketType, WatchlistResponse } from "../lib/market-types";
+import type { AiExplanation, Candle, MarketAnalysis, MarketType, ReversalReadiness, WatchlistResponse } from "../lib/market-types";
 
 const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
 const WATCHLIST_BATCH_COUNT = 14;
@@ -227,6 +228,32 @@ function LoadingTerminal({ symbol }: { symbol: string }) {
       </div>
       <div className="loading-track"><span /></div>
     </div>
+  );
+}
+
+function ReversalMeter({ reversal }: { reversal: ReversalReadiness }) {
+  if (!reversal || reversal.direction === "none" || !reversal.signals.length) return null;
+  const tone = reversal.stage === "Sắp đảo chiều"
+    ? "ready"
+    : reversal.stage === "Đang hình thành"
+      ? "forming"
+      : "weak";
+  return (
+    <span className={`watch-reversal ${reversal.direction} ${tone}`}>
+      <span className="watch-reversal-head">
+        <ShieldAlert size={11} />
+        <b>{reversal.stage}</b>
+        <em>{reversal.score}/100</em>
+      </span>
+      <span className="watch-reversal-track">
+        <i style={{ width: `${Math.min(100, Math.max(4, reversal.score))}%` }} />
+      </span>
+      <span className="watch-reversal-tags">
+        {reversal.signals.slice(0, 4).map((signal) => (
+          <em key={signal.key} title={signal.detail}>{signal.label}</em>
+        ))}
+      </span>
+    </span>
   );
 }
 
@@ -626,6 +653,7 @@ export function MarketTerminal() {
                       <span className="watch-reason">{divergence
                         ? <>Giá {formatPrice(divergence.previousPrice)} → {formatPrice(divergence.currentPrice)} · RSI {divergence.previousRsi} → {divergence.currentRsi}</>
                         : <>15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</>}</span>
+                      <ReversalMeter reversal={item.reversal} />
                       <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
                     </button>
                   );
@@ -688,6 +716,7 @@ export function MarketTerminal() {
                     <span className="watch-reason">{divergence
                       ? <>Giá {formatPrice(divergence.previousPrice)} → {formatPrice(divergence.currentPrice)} · RSI {divergence.previousRsi} → {divergence.currentRsi}</>
                       : <>15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</>}</span>
+                      <ReversalMeter reversal={item.reversal} />
                       <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
                     </button>
                   );
