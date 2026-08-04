@@ -120,10 +120,20 @@ export type WatchlistItem = {
   highestRsi: number;
   oversoldFrames: Array<"15m" | "1h" | "4h">;
   overboughtFrames: Array<"15m" | "1h" | "4h">;
+  bullishDivergences: RsiDivergence[];
+  bearishDivergences: RsiDivergence[];
   atrPercent: number;
   volumeRatio: number;
   fundingRate: number | null;
   reasons: string[];
+};
+
+export type RsiDivergence = {
+  frame: "15m" | "1h" | "4h";
+  previousPrice: number;
+  currentPrice: number;
+  previousRsi: number;
+  currentRsi: number;
 };
 
 export type WatchlistResponse = {

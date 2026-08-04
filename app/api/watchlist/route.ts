@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import symbolCatalog from "../../../lib/binance-usdt-symbols.json";
-import type { Candle, MarketType, Signal, WatchlistItem, WatchlistResponse } from "../../../lib/market-types";
+import type { Candle, MarketType, RsiDivergence, Signal, WatchlistItem, WatchlistResponse } from "../../../lib/market-types";
 
 const FUTURES_BASE = "https://fapi.binance.com";
 const SPOT_BASE = "https://data-api.binance.vision";
@@ -11,6 +11,10 @@ const RSI_HISTORY_LIMIT = 200;
 const RSI_PERIOD = 7;
 const RSI_OVERSOLD_THRESHOLD = 20;
 const RSI_OVERBOUGHT_THRESHOLD = 90;
+const DIVERGENCE_LOOKBACK = 80;
+const DIVERGENCE_PIVOT_WINDOW = 2;
+const DIVERGENCE_RECENT_BARS = 5;
+const DIVERGENCE_MIN_GAP = 3;
 const CACHE_TTL_MS = 90_000;
 
 const cache = new Map<string, { expires: number; data: WatchlistResponse }>();
@@ -139,18 +143,80 @@ function ema(values: number[], period: number) {
   return result;
 }
 
-function rsi(candles: Candle[], period = RSI_PERIOD) {
-  if (candles.length <= period) return 50;
+function rsiSeries(candles: Candle[], period = RSI_PERIOD) {
+  const values = new Array<number>(candles.length).fill(50);
+  if (candles.length <= period) return values;
   const closes = candles.map((candle) => candle.close);
   const changes = closes.slice(1).map((close, index) => close - closes[index]);
   let averageGain = average(changes.slice(0, period).map((change) => Math.max(change, 0)));
   let averageLoss = average(changes.slice(0, period).map((change) => Math.max(-change, 0)));
-  changes.slice(period).forEach((change) => {
+  const toRsi = () => !averageLoss ? (averageGain ? 100 : 50) : 100 - 100 / (1 + averageGain / averageLoss);
+  values[period] = toRsi();
+  changes.slice(period).forEach((change, offset) => {
     averageGain = (averageGain * (period - 1) + Math.max(change, 0)) / period;
     averageLoss = (averageLoss * (period - 1) + Math.max(-change, 0)) / period;
+    values[period + offset + 1] = toRsi();
   });
-  if (!averageLoss) return averageGain ? 100 : 50;
-  return 100 - 100 / (1 + averageGain / averageLoss);
+  return values;
+}
+
+function rsi(candles: Candle[], period = RSI_PERIOD) {
+  return rsiSeries(candles, period).at(-1) ?? 50;
+}
+
+function findRsiDivergence(
+  candles: Candle[],
+  frame: RsiDivergence["frame"],
+  kind: "bullish" | "bearish",
+): RsiDivergence | null {
+  if (candles.length <= RSI_PERIOD + DIVERGENCE_MIN_GAP) return null;
+  const values = rsiSeries(candles);
+  const recentStart = Math.max(RSI_PERIOD, candles.length - DIVERGENCE_RECENT_BARS);
+  let currentIndex = recentStart;
+  for (let index = recentStart + 1; index < candles.length; index += 1) {
+    const isMoreExtreme = kind === "bullish"
+      ? candles[index].low < candles[currentIndex].low
+      : candles[index].high > candles[currentIndex].high;
+    if (isMoreExtreme) currentIndex = index;
+  }
+
+  const currentPrice = kind === "bullish" ? candles[currentIndex].low : candles[currentIndex].high;
+  const currentRsi = values[currentIndex];
+  const isAtRsiExtreme = kind === "bullish"
+    ? currentRsi < RSI_OVERSOLD_THRESHOLD
+    : currentRsi > RSI_OVERBOUGHT_THRESHOLD;
+  if (!isAtRsiExtreme) return null;
+
+  const searchStart = Math.max(
+    RSI_PERIOD + DIVERGENCE_PIVOT_WINDOW,
+    candles.length - DIVERGENCE_LOOKBACK,
+  );
+  for (let index = currentIndex - DIVERGENCE_MIN_GAP; index >= searchStart; index -= 1) {
+    const candlePrice = kind === "bullish" ? candles[index].low : candles[index].high;
+    let isPivot = true;
+    for (let offset = 1; offset <= DIVERGENCE_PIVOT_WINDOW; offset += 1) {
+      const leftPrice = kind === "bullish" ? candles[index - offset].low : candles[index - offset].high;
+      const rightPrice = kind === "bullish" ? candles[index + offset].low : candles[index + offset].high;
+      if (kind === "bullish" ? candlePrice > leftPrice || candlePrice > rightPrice : candlePrice < leftPrice || candlePrice < rightPrice) {
+        isPivot = false;
+        break;
+      }
+    }
+    if (!isPivot) continue;
+
+    const priceConfirms = kind === "bullish" ? currentPrice < candlePrice : currentPrice > candlePrice;
+    const rsiConfirms = kind === "bullish" ? currentRsi > values[index] : currentRsi < values[index];
+    if (priceConfirms && rsiConfirms) {
+      return {
+        frame,
+        previousPrice: candlePrice,
+        currentPrice,
+        previousRsi: round(values[index], 1),
+        currentRsi: round(currentRsi, 1),
+      };
+    }
+  }
+  return null;
 }
 
 function atrPercent(candles: Candle[], period = 14) {
@@ -195,12 +261,27 @@ function scoreCoin(input: {
   const rsi1h = rsi(candles1h);
   const rsi4h = rsi(candles4h);
   const rsiByFrame = { "15m": rsi15m, "1h": rsi1h, "4h": rsi4h };
+  const frameData = [
+    { frame: "15m" as const, candles: candles15m },
+    { frame: "1h" as const, candles: candles1h },
+    { frame: "4h" as const, candles: candles4h },
+  ];
   const oversoldFrames = (Object.entries(rsiByFrame) as Array<["15m" | "1h" | "4h", number]>)
     .filter(([, value]) => value < RSI_OVERSOLD_THRESHOLD)
     .map(([frame]) => frame);
   const overboughtFrames = (Object.entries(rsiByFrame) as Array<["15m" | "1h" | "4h", number]>)
     .filter(([, value]) => value > RSI_OVERBOUGHT_THRESHOLD)
     .map(([frame]) => frame);
+  const bullishDivergences = frameData
+    .map(({ frame, candles }) => rsiByFrame[frame] < RSI_OVERSOLD_THRESHOLD
+      ? findRsiDivergence(candles, frame, "bullish")
+      : null)
+    .filter((item): item is RsiDivergence => item !== null);
+  const bearishDivergences = frameData
+    .map(({ frame, candles }) => rsiByFrame[frame] > RSI_OVERBOUGHT_THRESHOLD
+      ? findRsiDivergence(candles, frame, "bearish")
+      : null)
+    .filter((item): item is RsiDivergence => item !== null);
   const lowestRsi = Math.min(rsi15m, rsi1h, rsi4h);
   const highestRsi = Math.max(rsi15m, rsi1h, rsi4h);
   const momentum15m = rsi15m > 55 ? 1 : rsi15m < 45 ? -1 : 0;
@@ -258,6 +339,8 @@ function scoreCoin(input: {
     highestRsi: round(highestRsi, 1),
     oversoldFrames,
     overboughtFrames,
+    bullishDivergences,
+    bearishDivergences,
     atrPercent: round(volatility, 2),
     volumeRatio: round(volumeRatio, 2),
     fundingRate,
@@ -306,16 +389,16 @@ export async function GET(request: Request) {
       .filter((result): result is PromiseFulfilledResult<WatchlistItem> => result.status === "fulfilled")
       .map((result) => result.value);
     const items = successfulItems
-      .filter((item) => item.oversoldFrames.length > 0)
+      .filter((item) => item.bullishDivergences.length > 0)
       .sort((left, right) =>
-        right.oversoldFrames.length - left.oversoldFrames.length ||
+        right.bullishDivergences.length - left.bullishDivergences.length ||
         left.lowestRsi - right.lowestRsi ||
         right.quoteVolume24h - left.quoteVolume24h,
       );
     const overboughtItems = successfulItems
-      .filter((item) => item.overboughtFrames.length > 0)
+      .filter((item) => item.bearishDivergences.length > 0)
       .sort((left, right) =>
-        right.overboughtFrames.length - left.overboughtFrames.length ||
+        right.bearishDivergences.length - left.bearishDivergences.length ||
         right.highestRsi - left.highestRsi ||
         right.quoteVolume24h - left.quoteVolume24h,
       );
@@ -334,8 +417,8 @@ export async function GET(request: Request) {
       refreshIntervalMs: CACHE_TTL_MS,
       items,
       overboughtItems,
-      methodology: "Quét top 200 volume 24h bằng RSI(7) Wilder/RMA trên 200 nến riêng cho từng khung 15m, 1h và 4h, bao gồm nến đang chạy; ngưỡng hiển thị < 20.",
-      overboughtMethodology: "Quét top 200 volume 24h bằng RSI(7) Wilder/RMA trên 200 nến riêng cho từng khung 15m, 1h và 4h, bao gồm nến đang chạy; ngưỡng hiển thị > 90.",
+      methodology: "Tín hiệu LONG: RSI(7) < 20 và phân kỳ tăng, giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn trên 15m, 1h hoặc 4h; bao gồm nến đang chạy.",
+      overboughtMethodology: "Tín hiệu SHORT: RSI(7) > 90 và phân kỳ giảm, giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn trên 15m, 1h hoặc 4h; bao gồm nến đang chạy.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {
