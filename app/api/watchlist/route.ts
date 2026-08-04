@@ -389,16 +389,18 @@ export async function GET(request: Request) {
       .filter((result): result is PromiseFulfilledResult<WatchlistItem> => result.status === "fulfilled")
       .map((result) => result.value);
     const items = successfulItems
-      .filter((item) => item.bullishDivergences.length > 0)
+      .filter((item) => item.oversoldFrames.length > 0)
       .sort((left, right) =>
         right.bullishDivergences.length - left.bullishDivergences.length ||
+        right.oversoldFrames.length - left.oversoldFrames.length ||
         left.lowestRsi - right.lowestRsi ||
         right.quoteVolume24h - left.quoteVolume24h,
       );
     const overboughtItems = successfulItems
-      .filter((item) => item.bearishDivergences.length > 0)
+      .filter((item) => item.overboughtFrames.length > 0)
       .sort((left, right) =>
         right.bearishDivergences.length - left.bearishDivergences.length ||
+        right.overboughtFrames.length - left.overboughtFrames.length ||
         right.highestRsi - left.highestRsi ||
         right.quoteVolume24h - left.quoteVolume24h,
       );
@@ -417,8 +419,8 @@ export async function GET(request: Request) {
       refreshIntervalMs: CACHE_TTL_MS,
       items,
       overboughtItems,
-      methodology: "Tín hiệu LONG: RSI(7) < 20 và phân kỳ tăng, giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn trên 15m, 1h hoặc 4h; bao gồm nến đang chạy.",
-      overboughtMethodology: "Tín hiệu SHORT: RSI(7) > 90 và phân kỳ giảm, giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn trên 15m, 1h hoặc 4h; bao gồm nến đang chạy.",
+      methodology: "Bắt buộc RSI(7) < 20 trên 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn; bao gồm nến đang chạy.",
+      overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn; bao gồm nến đang chạy.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {

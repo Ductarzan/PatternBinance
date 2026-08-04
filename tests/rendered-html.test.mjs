@@ -68,10 +68,10 @@ test("keeps market logic deterministic and Gemini server-only", async () => {
   assert.match(terminal, /COIN_OPTIONS\[market\]/);
   assert.match(terminal, /WATCHLIST_REFRESH_MS = 90_000/);
   assert.match(terminal, /WATCHLIST_REQUEST_CONCURRENCY = 2/);
-  assert.match(terminal, /RSI\(7\) &lt; 20 \+ phân kỳ tăng/);
-  assert.match(terminal, /RSI\(7\) &gt; 90 \+ phân kỳ giảm/);
-  assert.match(terminal, /RSI BULLISH DIVERGENCE/);
-  assert.match(terminal, /RSI BEARISH DIVERGENCE/);
+  assert.match(terminal, /Top coin RSI\(7\) &lt; 20/);
+  assert.match(terminal, /Top coin RSI\(7\) &gt; 90/);
+  assert.match(terminal, /RSI OVERSOLD SCANNER/);
+  assert.match(terminal, /RSI OVERBOUGHT SCANNER/);
   assert.match(terminal, /LONG ·/);
   assert.match(terminal, /SHORT ·/);
   assert.ok(catalog.futures.length > 500);
