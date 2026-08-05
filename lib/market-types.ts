@@ -124,6 +124,7 @@ export type WatchlistItem = {
   bearishDivergences: RsiDivergence[];
   reversal: ReversalReadiness;
   volumeAlerts: VolumeAlert[];
+  volumeVerdict: VolumeVerdict;
   atrPercent: number;
   volumeRatio: number;
   fundingRate: number | null;
@@ -159,6 +160,13 @@ export type VolumeAlert = {
   detail: string;
   conclusion: string;
   strength: number;
+};
+
+export type VolumeVerdict = {
+  bias: "bullish" | "bearish" | "mixed" | "none";
+  headline: string;
+  detail: string;
+  confidence: "Mạnh" | "Vừa" | "Nhẹ" | "—";
 };
 
 export type ReversalSignalKey =

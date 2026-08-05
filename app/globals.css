@@ -173,17 +173,24 @@ button { color: inherit; }
 .watch-reversal.weak .watch-reversal-head { color: #737d8b; }
 .watch-reversal.weak .watch-reversal-track > i { background: #4d5764; }
 .watch-reversal.ready .watch-reversal-head b { text-shadow: 0 0 9px currentColor; }
-.watch-alerts { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
-.watch-alert { padding: 4px 5px; display: flex; align-items: center; gap: 4px; border-left: 2px solid transparent; border-radius: 0 4px 4px 0; background: rgba(255,255,255,.035); }
-.watch-alert b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #99a3b1; font: 650 7px var(--font-geist-mono); }
-.watch-alert i { color: #626c7a; font: 600 6.5px var(--font-geist-mono); font-style: normal; }
-.watch-alert em { padding: 1px 3px; border-radius: 3px; font: 700 6.5px var(--font-geist-mono); font-style: normal; }
+.watch-alerts { margin-top: 9px; display: flex; flex-direction: column; gap: 5px; }
+.watch-verdict { display: flex; align-items: center; gap: 5px; color: #7b8593; font: 650 7.5px var(--font-geist-mono); }
+.watch-verdict b { font: 700 8px var(--font-geist-mono); letter-spacing: .02em; }
+.watch-verdict em { margin-left: auto; padding: 1px 4px; border-radius: 3px; background: rgba(255,255,255,.05); color: inherit; font: 600 6.5px var(--font-geist-mono); font-style: normal; }
+.watch-verdict.bullish { color: var(--green); }
+.watch-verdict.bearish { color: var(--red); }
+.watch-verdict.mixed { color: var(--yellow); }
+.watch-verdict-detail { margin-top: -1px; color: #7b8593; font-size: 8px; line-height: 1.5; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.watch-alert { padding: 4px 6px; display: flex; flex-direction: column; gap: 2px; border-left: 2px solid transparent; border-radius: 0 4px 4px 0; background: rgba(255,255,255,.035); }
+.watch-alert-head { display: flex; align-items: center; gap: 4px; }
+.watch-alert-head b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #aab4c2; font: 650 7px var(--font-geist-mono); }
+.watch-alert-head i { color: #626c7a; font: 600 6.5px var(--font-geist-mono); font-style: normal; }
+.watch-alert-head em { padding: 1px 3px; border-radius: 3px; font: 700 6.5px var(--font-geist-mono); font-style: normal; }
+.watch-alert-meaning { color: #79838f; font-size: 7.5px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .watch-alert.bullish { border-left-color: var(--green); }
-.watch-alert.bullish > svg { color: var(--green); }
-.watch-alert.bullish em { color: var(--green); background: rgba(19,199,132,.1); }
+.watch-alert.bullish .watch-alert-head em { color: var(--green); background: rgba(19,199,132,.1); }
 .watch-alert.bearish { border-left-color: var(--red); }
-.watch-alert.bearish > svg { color: var(--red); }
-.watch-alert.bearish em { color: var(--red); background: rgba(239,72,104,.1); }
+.watch-alert.bearish .watch-alert-head em { color: var(--red); background: rgba(239,72,104,.1); }
 .watch-open { margin-top: auto; padding-top: 8px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line-soft); color: #8a94a2; font: 600 8px var(--font-geist-mono); }
 .watch-card:hover .watch-open { color: var(--yellow); }
 .watch-card-skeleton { min-height: 168px; border-right: 1px solid var(--line-soft); background: linear-gradient(100deg, rgba(23,28,36,.45) 25%, rgba(42,48,58,.45) 38%, rgba(23,28,36,.45) 52%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }

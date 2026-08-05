@@ -32,7 +32,7 @@ import {
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import symbolCatalog from "../lib/binance-usdt-symbols.json";
-import type { AiExplanation, Candle, MarketAnalysis, MarketType, ReversalReadiness, VolumeAlert, WatchlistResponse } from "../lib/market-types";
+import type { AiExplanation, Candle, MarketAnalysis, MarketType, ReversalReadiness, VolumeAlert, VolumeVerdict, WatchlistResponse } from "../lib/market-types";
 
 const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
 const WATCHLIST_BATCH_COUNT = 14;
@@ -257,20 +257,36 @@ function ReversalMeter({ reversal }: { reversal: ReversalReadiness }) {
   );
 }
 
-function VolumeAlerts({ alerts, limit = 2 }: { alerts: VolumeAlert[]; limit?: number }) {
-  if (!alerts?.length) return null;
+function VolumeAlerts({
+  alerts,
+  verdict,
+  limit = 2,
+}: {
+  alerts: VolumeAlert[];
+  verdict: VolumeVerdict;
+  limit?: number;
+}) {
+  if (!alerts?.length || !verdict || verdict.bias === "none") return null;
   return (
     <span className="watch-alerts">
+      <span className={`watch-verdict ${verdict.bias}`} title={verdict.detail}>
+        {verdict.bias === "mixed" ? <AlertTriangle size={10} /> : <Zap size={10} />}
+        <b>{verdict.headline}</b>
+        {verdict.confidence === "—" ? null : <em>{verdict.confidence}</em>}
+      </span>
+      <span className="watch-verdict-detail">{verdict.detail}</span>
       {alerts.slice(0, limit).map((alert) => (
         <span
           key={`${alert.key}-${alert.frame}`}
           className={`watch-alert ${alert.bias}`}
-          title={`${alert.detail} → ${alert.conclusion}`}
+          title={alert.detail}
         >
-          <Zap size={9} />
-          <b>{alert.label}</b>
-          <i>{alert.frame}</i>
-          <em>{alert.action}</em>
+          <span className="watch-alert-head">
+            <b>{alert.label}</b>
+            <i>{alert.frame}</i>
+            <em>{alert.action}</em>
+          </span>
+          <span className="watch-alert-meaning">{alert.conclusion}</span>
         </span>
       ))}
     </span>
@@ -674,7 +690,7 @@ export function MarketTerminal() {
                         ? <>Giá {formatPrice(divergence.previousPrice)} → {formatPrice(divergence.currentPrice)} · RSI {divergence.previousRsi} → {divergence.currentRsi}</>
                         : <>15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</>}</span>
                       <ReversalMeter reversal={item.reversal} />
-                      <VolumeAlerts alerts={item.volumeAlerts} />
+                      <VolumeAlerts alerts={item.volumeAlerts} verdict={item.volumeVerdict} />
                       <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
                     </button>
                   );
@@ -738,7 +754,7 @@ export function MarketTerminal() {
                       ? <>Giá {formatPrice(divergence.previousPrice)} → {formatPrice(divergence.currentPrice)} · RSI {divergence.previousRsi} → {divergence.currentRsi}</>
                       : <>15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</>}</span>
                       <ReversalMeter reversal={item.reversal} />
-                      <VolumeAlerts alerts={item.volumeAlerts} />
+                      <VolumeAlerts alerts={item.volumeAlerts} verdict={item.volumeVerdict} />
                       <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
                     </button>
                   );

@@ -8,6 +8,7 @@ import type {
   RsiDivergence,
   Signal,
   VolumeAlert,
+  VolumeVerdict,
   WatchlistItem,
   WatchlistResponse,
 } from "../../../lib/market-types";
@@ -37,6 +38,7 @@ const VOLUME_ALERT_PRICE_MOVE = 0.35;
 const VOLUME_ALERT_FADE = 0.3;
 const VOLUME_ALERT_MIN_STRENGTH = 35;
 const VOLUME_ALERT_LIMIT = 3;
+const VOLUME_VERDICT_CONFLICT = 0.6;
 const CACHE_TTL_MS = 90_000;
 
 const cache = new Map<string, { expires: number; data: WatchlistResponse }>();
@@ -516,6 +518,7 @@ function detectVolumeAlerts(candles: Candle[], frame: RsiDivergence["frame"]): V
     0,
     100,
   ));
+  const context = `${bars} nến ${frame} gần nhất`;
 
   const riseVolumeFade = priceMove >= VOLUME_ALERT_PRICE_MOVE
     && greenBars >= redBars
@@ -526,9 +529,9 @@ function detectVolumeAlerts(candles: Candle[], frame: RsiDivergence["frame"]): V
       frame,
       bias: "bearish",
       action: "SHORT",
-      label: "Giá tăng nhưng volume cạn",
-      detail: `Giá +${round(priceMove, 2)}% qua ${bars} nến ${frame}, volume ${volumeSlope < 0 ? `giảm ${slopePercent}%/nến` : "đi ngang"}, volume mua nửa sau giảm ${Math.round(buyFade * 100)}%`,
-      conclusion: "Tăng không bền → canh SHORT khi có nến đảo chiều",
+      label: "Giá tăng, lực mua yếu dần",
+      detail: `${context}: giá +${round(priceMove, 2)}% nhưng volume ${volumeSlope < 0 ? `giảm dần ${slopePercent}%/nến` : "đi ngang"}, volume mua 3 nến cuối thấp hơn 3 nến trước ${Math.round(buyFade * 100)}%`,
+      conclusion: "Tăng mà không có tiền vào → dễ quay đầu, canh SHORT",
       strength: strengthOf([
         clamp(priceMove / 2.5) * 25,
         clamp(-volumeSlope / 0.3) * 25,
@@ -543,9 +546,9 @@ function detectVolumeAlerts(candles: Candle[], frame: RsiDivergence["frame"]): V
       frame,
       bias: "bullish",
       action: "LONG",
-      label: "Nến đỏ nhưng volume bán cạn",
-      detail: `${redBars}/${bars} nến ${frame} đỏ, volume bán nửa sau giảm ${Math.round(sellFade * 100)}% so với nửa đầu (giá ${round(priceMove, 2)}%)`,
-      conclusion: "Cạn cung → canh LONG khi RSI bẻ lên khỏi đáy",
+      label: "Giá giảm, lực bán yếu dần",
+      detail: `${context}: ${redBars}/${bars} nến đỏ (giá ${round(priceMove, 2)}%) nhưng volume bán 3 nến cuối giảm ${Math.round(sellFade * 100)}% so với 3 nến trước`,
+      conclusion: "Người bán đã đuối → chờ LONG khi giá bật lại",
       strength: strengthOf([
         clamp(sellFade / 0.7) * 35,
         clamp(-priceMove / 2.5) * 15,
@@ -560,9 +563,9 @@ function detectVolumeAlerts(candles: Candle[], frame: RsiDivergence["frame"]): V
       frame,
       bias: "bearish",
       action: "SHORT",
-      label: "Nến xanh nhưng volume mua cạn",
-      detail: `${greenBars}/${bars} nến ${frame} xanh nhưng volume mua nửa sau giảm ${Math.round(buyFade * 100)}%, giá chỉ ${round(priceMove, 2)}%`,
-      conclusion: "Cạn cầu → ưu tiên chốt lời / canh SHORT",
+      label: "Nến xanh nhưng ít người mua",
+      detail: `${context}: ${greenBars}/${bars} nến xanh nhưng volume mua giảm ${Math.round(buyFade * 100)}% và giá gần như đứng yên (${round(priceMove, 2)}%)`,
+      conclusion: "Hết người mua đuổi → tránh vào LONG, canh SHORT",
       strength: strengthOf([
         clamp(buyFade / 0.7) * 30,
         clamp(greenBars / bars) * 15,
@@ -577,9 +580,9 @@ function detectVolumeAlerts(candles: Candle[], frame: RsiDivergence["frame"]): V
       frame,
       bias: "bullish",
       action: "LONG",
-      label: "Giá giảm nhưng volume mua tăng",
-      detail: `Giá ${round(priceMove, 2)}% qua ${bars} nến ${frame}, volume mua nửa sau gấp ${round(lateBuy / earlyBuy, 2)}× nửa đầu`,
-      conclusion: "Lực mua đang hấp thụ → canh LONG theo nhịp hồi",
+      label: "Giá giảm nhưng người mua vào mạnh",
+      detail: `${context}: giá ${round(priceMove, 2)}% nhưng volume mua 3 nến cuối gấp ${round(lateBuy / earlyBuy, 2)}× 3 nến trước và lấn át bên bán`,
+      conclusion: "Có lực đỡ giá ở vùng này → canh LONG",
       strength: strengthOf([
         clamp((lateBuy / earlyBuy - 1) / 1.2) * 30,
         clamp(relativeVolume / 2) * 20,
@@ -593,9 +596,9 @@ function detectVolumeAlerts(candles: Candle[], frame: RsiDivergence["frame"]): V
       frame,
       bias: "bullish",
       action: "LONG",
-      label: "Tăng đi kèm volume",
-      detail: `Giá +${round(priceMove, 2)}% qua ${bars} nến ${frame}, volume tăng ${slopePercent}%/nến và bên mua áp đảo`,
-      conclusion: "Dòng tiền xác nhận → giữ hướng LONG",
+      label: "Giá tăng cùng volume",
+      detail: `${context}: giá +${round(priceMove, 2)}%, volume tăng dần ${slopePercent}%/nến và bên mua áp đảo`,
+      conclusion: "Đà tăng có tiền thật đỡ → theo LONG",
       strength: strengthOf([
         clamp(priceMove / 2.5) * 20,
         clamp(volumeSlope / 0.3) * 25,
@@ -610,9 +613,9 @@ function detectVolumeAlerts(candles: Candle[], frame: RsiDivergence["frame"]): V
       frame,
       bias: "bearish",
       action: "SHORT",
-      label: "Giảm đi kèm volume bán tăng",
-      detail: `Giá ${round(priceMove, 2)}% qua ${bars} nến ${frame}, volume tăng ${slopePercent}%/nến và bên bán áp đảo`,
-      conclusion: "Cung còn mạnh → chưa bắt đáy, ưu tiên SHORT",
+      label: "Giá giảm, lực bán mạnh thêm",
+      detail: `${context}: giá ${round(priceMove, 2)}%, volume tăng dần ${slopePercent}%/nến và bên bán áp đảo`,
+      conclusion: "Còn nhiều hàng xả → chưa bắt đáy, theo SHORT",
       strength: strengthOf([
         clamp(-priceMove / 2.5) * 20,
         clamp(volumeSlope / 0.3) * 25,
@@ -641,6 +644,42 @@ function volumeAlertBias(alerts: VolumeAlert[], kind: "bullish" | "bearish") {
   return alerts
     .filter((alert) => alert.bias === kind)
     .reduce((sum, alert) => sum + alert.strength, 0);
+}
+
+function buildVolumeVerdict(alerts: VolumeAlert[]): VolumeVerdict {
+  if (!alerts.length) {
+    return {
+      bias: "none",
+      headline: "Volume chưa nói gì",
+      detail: "Giá và volume đi cùng nhau, chưa có dấu hiệu lệch pha đáng chú ý.",
+      confidence: "—",
+    };
+  }
+
+  const bullish = alerts.filter((alert) => alert.bias === "bullish");
+  const bearish = alerts.filter((alert) => alert.bias === "bearish");
+  const bullishScore = volumeAlertBias(alerts, "bullish");
+  const bearishScore = volumeAlertBias(alerts, "bearish");
+  const weaker = Math.min(bullishScore, bearishScore);
+  const stronger = Math.max(bullishScore, bearishScore);
+
+  if (weaker && weaker / stronger >= VOLUME_VERDICT_CONFLICT) {
+    return {
+      bias: "mixed",
+      headline: "Volume đang mâu thuẫn",
+      detail: `Khung ${bullish.map((alert) => alert.frame).join("/")} cho tín hiệu mua, khung ${bearish.map((alert) => alert.frame).join("/")} cho tín hiệu bán. Nên đứng ngoài chờ một bên thắng thế.`,
+      confidence: "—",
+    };
+  }
+
+  const leading = (bullishScore > bearishScore ? bullish : bearish)
+    .reduce((left, right) => (right.strength > left.strength ? right : left));
+  return {
+    bias: leading.bias,
+    headline: leading.bias === "bullish" ? "Volume ủng hộ phe mua" : "Volume ủng hộ phe bán",
+    detail: `${leading.label} trên khung ${leading.frame}. ${leading.conclusion}.`,
+    confidence: leading.strength >= 70 ? "Mạnh" : leading.strength >= 50 ? "Vừa" : "Nhẹ",
+  };
 }
 
 function atrPercent(candles: Candle[], period = 14) {
@@ -743,6 +782,7 @@ function scoreCoin(input: {
     }
     : bearishReversal!;
   const volumeAlerts = collectVolumeAlerts(frameData);
+  const volumeVerdict = buildVolumeVerdict(volumeAlerts);
   const momentum15m = rsi15m > 55 ? 1 : rsi15m < 45 ? -1 : 0;
   const momentum1h = rsi1h > 55 ? 1 : rsi1h < 45 ? -1 : 0;
   const momentumDirection = (momentum15m + momentum1h) / 2;
@@ -785,9 +825,12 @@ function scoreCoin(input: {
   if (reversal.score > 0) {
     reasons.push(`Đảo chiều ${reversal.stage.toLowerCase()} (${reversal.score}/100): ${reversal.signals.map((item) => item.label).join(", ")}`);
   }
-  volumeAlerts.forEach((alert) => {
-    reasons.push(`${alert.action} · ${alert.label} (${alert.frame}): ${alert.conclusion}`);
-  });
+  if (volumeAlerts.length) {
+    reasons.push(`${volumeVerdict.headline}: ${volumeVerdict.detail}`);
+    volumeAlerts.forEach((alert) => {
+      reasons.push(`${alert.frame} · ${alert.label} → ${alert.conclusion}`);
+    });
+  }
 
   return {
     symbol,
@@ -808,6 +851,7 @@ function scoreCoin(input: {
     bearishDivergences,
     reversal,
     volumeAlerts,
+    volumeVerdict,
     atrPercent: round(volatility, 2),
     volumeRatio: round(volumeRatio, 2),
     fundingRate,
@@ -890,8 +934,8 @@ export async function GET(request: Request) {
       refreshIntervalMs: CACHE_TTL_MS,
       items,
       overboughtItems,
-      methodology: "Bắt buộc RSI(7) < 20 trên 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ lên khỏi đáy, nến đảo chiều, volume climax, lấy lại EMA20 và phá swing high; bao gồm nến đang chạy. Alert giá–volume chạy thêm bộ quy tắc trên 6 nến gần nhất: nến đỏ nhưng volume bán cạn dần → cạn cung → LONG; giá giảm nhưng volume mua tăng → hấp thụ → LONG; giá tăng nhưng volume cạn → tăng không bền → SHORT.",
-      overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ xuống khỏi đỉnh, nến đảo chiều, volume climax, mất EMA20 và phá swing low; bao gồm nến đang chạy. Alert giá–volume chạy thêm bộ quy tắc trên 6 nến gần nhất: giá tăng nhưng volume nến giảm → tăng không bền → SHORT; nến xanh nhưng volume mua cạn → cạn cầu → SHORT; giá giảm kèm volume bán tăng → cung còn mạnh, chưa bắt đáy.",
+      methodology: "Bắt buộc RSI(7) < 20 trên 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ lên khỏi đáy, nến đảo chiều, volume climax, lấy lại EMA20 và phá swing high; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá giảm mà lực bán yếu dần nghĩa là người bán đã đuối (canh LONG); giá tăng mà lực mua yếu dần nghĩa là nhịp tăng thiếu tiền (canh SHORT). Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ.",
+      overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ xuống khỏi đỉnh, nến đảo chiều, volume climax, mất EMA20 và phá swing low; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá tăng mà lực mua yếu dần nghĩa là hết người mua đuổi (canh SHORT); giá tăng cùng volume nghĩa là đà tăng còn thật (chưa nên SHORT). Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {
