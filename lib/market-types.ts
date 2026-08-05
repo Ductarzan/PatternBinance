@@ -123,6 +123,7 @@ export type WatchlistItem = {
   bullishDivergences: RsiDivergence[];
   bearishDivergences: RsiDivergence[];
   reversal: ReversalReadiness;
+  volumeAlerts: VolumeAlert[];
   atrPercent: number;
   volumeRatio: number;
   fundingRate: number | null;
@@ -138,6 +139,25 @@ export type RsiDivergence = {
   barsApart: number;
   rsiGap: number;
   priceGapPercent: number;
+  strength: number;
+};
+
+export type VolumeAlertKey =
+  | "riseVolumeFade"
+  | "supplyDryUp"
+  | "demandDryUp"
+  | "buyAbsorption"
+  | "riseVolumeConfirm"
+  | "sellPressureBuilding";
+
+export type VolumeAlert = {
+  key: VolumeAlertKey;
+  frame: "15m" | "1h" | "4h";
+  bias: "bullish" | "bearish";
+  action: "LONG" | "SHORT" | "WATCH";
+  label: string;
+  detail: string;
+  conclusion: string;
   strength: number;
 };
 

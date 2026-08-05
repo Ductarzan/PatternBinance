@@ -32,7 +32,7 @@ import {
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import symbolCatalog from "../lib/binance-usdt-symbols.json";
-import type { AiExplanation, Candle, MarketAnalysis, MarketType, ReversalReadiness, WatchlistResponse } from "../lib/market-types";
+import type { AiExplanation, Candle, MarketAnalysis, MarketType, ReversalReadiness, VolumeAlert, WatchlistResponse } from "../lib/market-types";
 
 const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
 const WATCHLIST_BATCH_COUNT = 14;
@@ -253,6 +253,26 @@ function ReversalMeter({ reversal }: { reversal: ReversalReadiness }) {
           <em key={signal.key} title={signal.detail}>{signal.label}</em>
         ))}
       </span>
+    </span>
+  );
+}
+
+function VolumeAlerts({ alerts, limit = 2 }: { alerts: VolumeAlert[]; limit?: number }) {
+  if (!alerts?.length) return null;
+  return (
+    <span className="watch-alerts">
+      {alerts.slice(0, limit).map((alert) => (
+        <span
+          key={`${alert.key}-${alert.frame}`}
+          className={`watch-alert ${alert.bias}`}
+          title={`${alert.detail} → ${alert.conclusion}`}
+        >
+          <Zap size={9} />
+          <b>{alert.label}</b>
+          <i>{alert.frame}</i>
+          <em>{alert.action}</em>
+        </span>
+      ))}
     </span>
   );
 }
@@ -654,6 +674,7 @@ export function MarketTerminal() {
                         ? <>Giá {formatPrice(divergence.previousPrice)} → {formatPrice(divergence.currentPrice)} · RSI {divergence.previousRsi} → {divergence.currentRsi}</>
                         : <>15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</>}</span>
                       <ReversalMeter reversal={item.reversal} />
+                      <VolumeAlerts alerts={item.volumeAlerts} />
                       <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
                     </button>
                   );
@@ -717,6 +738,7 @@ export function MarketTerminal() {
                       ? <>Giá {formatPrice(divergence.previousPrice)} → {formatPrice(divergence.currentPrice)} · RSI {divergence.previousRsi} → {divergence.currentRsi}</>
                       : <>15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</>}</span>
                       <ReversalMeter reversal={item.reversal} />
+                      <VolumeAlerts alerts={item.volumeAlerts} />
                       <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
                     </button>
                   );
