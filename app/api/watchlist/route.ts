@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import symbolCatalog from "../../../lib/binance-usdt-symbols.json";
 import type {
+  BaseProbe,
+  BaseProbeSignal,
   Candle,
   MarketType,
   ReversalReadiness,
@@ -39,6 +41,17 @@ const VOLUME_ALERT_FADE = 0.3;
 const VOLUME_ALERT_MIN_STRENGTH = 35;
 const VOLUME_ALERT_LIMIT = 3;
 const VOLUME_VERDICT_CONFLICT = 0.6;
+const BASE_LOOKBACK = 60;
+const BASE_PIVOT_WINDOW = 2;
+const BASE_MIN_TOUCHES = 3;
+const BASE_MIN_SPAN = 8;
+const BASE_RANGE_POSITION = 0.3;
+const BASE_TRAP_LOOKBACK = 15;
+// Giá phải còn nằm quanh nền mới gọi là đang dò; chạy xa rồi thì hết actionable.
+const BASE_PROXIMITY_TOLERANCE = 3;
+const BASE_PROBE_READY_SCORE = 75;
+const BASE_PROBE_FORMING_SCORE = 58;
+const BASE_PROBE_MIN_SCORE = 58;
 const DEPTH_LIMIT = 20;
 const ORDER_BOOK_LEVELS = 20;
 const ORDER_BOOK_ALERT_THRESHOLD = 20;
@@ -729,6 +742,232 @@ function buildVolumeVerdict(alerts: VolumeAlert[], orderBookImbalanceValue: numb
   };
 }
 
+function findPivots(candles: Candle[], kind: "low" | "high", pivotWindow: number) {
+  const indexes: number[] = [];
+  const priceAt = (index: number) => kind === "low" ? candles[index].low : candles[index].high;
+  for (let index = pivotWindow; index < candles.length - pivotWindow; index += 1) {
+    const price = priceAt(index);
+    let isPivot = true;
+    for (let offset = 1; offset <= pivotWindow; offset += 1) {
+      const left = priceAt(index - offset);
+      const right = priceAt(index + offset);
+      if (kind === "low" ? price > left || price > right : price < left || price < right) {
+        isPivot = false;
+        break;
+      }
+    }
+    if (isPivot) indexes.push(index);
+  }
+  return indexes;
+}
+
+const emptyBaseProbe: BaseProbe = {
+  direction: "none",
+  frame: "15m",
+  score: 0,
+  stage: "Chưa có",
+  level: 0,
+  invalidation: 0,
+  touches: 0,
+  spanBars: 0,
+  headline: "Chưa thấy nền giá",
+  detail: "Giá chưa test lại cùng một vùng đủ số lần để coi là đang dò đáy hay dò đỉnh.",
+  signals: [],
+};
+
+function assessBaseProbe(
+  candles: Candle[],
+  frame: RsiDivergence["frame"],
+  kind: "bottom" | "top",
+): BaseProbe | null {
+  if (candles.length < BASE_LOOKBACK) return null;
+  const window = candles.slice(-BASE_LOOKBACK);
+  const bottom = kind === "bottom";
+  const lows = window.map((candle) => candle.low);
+  const highs = window.map((candle) => candle.high);
+  const windowLow = Math.min(...lows);
+  const windowHigh = Math.max(...highs);
+  const range = windowHigh - windowLow;
+  if (range <= 0) return null;
+
+  const priceAt = (index: number) => bottom ? lows[index] : highs[index];
+  const pivots = findPivots(window, bottom ? "low" : "high", BASE_PIVOT_WINDOW);
+  // Pivot ở sát mép phải chưa đủ nến để xác nhận, nên lấy thêm mốc cực trị của đuôi.
+  const tailStart = Math.max(0, window.length - BASE_PIVOT_WINDOW - 1);
+  let tailIndex = tailStart;
+  for (let index = tailStart + 1; index < window.length; index += 1) {
+    if (bottom ? lows[index] < lows[tailIndex] : highs[index] > highs[tailIndex]) tailIndex = index;
+  }
+  const candidates = [...new Set([...pivots, tailIndex])].sort((left, right) => left - right);
+  if (candidates.length < BASE_MIN_TOUCHES) return null;
+
+  const extreme = bottom
+    ? Math.min(...candidates.map(priceAt))
+    : Math.max(...candidates.map(priceAt));
+  if (!extreme) return null;
+  const position = (extreme - windowLow) / range;
+  if (bottom ? position > BASE_RANGE_POSITION : position < 1 - BASE_RANGE_POSITION) return null;
+
+  const volatility = atrPercent(window);
+  const tolerance = clamp(volatility * 0.9, 0.6, 4);
+  const bandLimit = bottom
+    ? extreme * (1 + tolerance / 100)
+    : extreme * (1 - tolerance / 100);
+  const touches = candidates.filter((index) => bottom
+    ? priceAt(index) <= bandLimit
+    : priceAt(index) >= bandLimit);
+  if (touches.length < BASE_MIN_TOUCHES) return null;
+  const spanBars = touches.at(-1)! - touches[0];
+  if (spanBars < BASE_MIN_SPAN) return null;
+
+  const level = average(touches.map(priceAt));
+  if (!level) return null;
+
+  const closes = window.map((candle) => candle.close);
+  const currentClose = closes.at(-1)!;
+  // Giá đã rời nền quá xa thì đây là hậu quả của nền cũ, không còn là vùng đang dò.
+  const distance = ((currentClose - level) / level) * 100;
+  const maxDistance = tolerance * BASE_PROXIMITY_TOLERANCE;
+  if (bottom ? distance > maxDistance || distance < -tolerance : distance < -maxDistance || distance > tolerance) {
+    return null;
+  }
+
+  const signals: BaseProbeSignal[] = [];
+  const touchCount = touches.length;
+  signals.push({
+    key: "levelRetest",
+    label: bottom ? `Test lại vùng đáy ${touchCount} lần` : `Test lại vùng đỉnh ${touchCount} lần`,
+    detail: `Vùng ${round(level, 6)} bị chạm ${touchCount} lần trong ${spanBars} nến ${frame} mà không đi xa hơn.`,
+    weight: touchCount >= 5 ? 22 : touchCount === 4 ? 20 : 16,
+  });
+
+  const firstTouch = priceAt(touches[0]);
+  const lastTouch = priceAt(touches.at(-1)!);
+  const drift = ((lastTouch - firstTouch) / level) * 100;
+  if (bottom ? drift > 0.15 : drift < -0.15) {
+    signals.push({
+      key: bottom ? "higherLows" : "lowerHighs",
+      label: bottom ? "Đáy sau cao hơn đáy trước" : "Đỉnh sau thấp hơn đỉnh trước",
+      detail: `${round(firstTouch, 6)} → ${round(lastTouch, 6)} (${round(drift, 2)}%), bên ${bottom ? "mua" : "bán"} đang lấn dần.`,
+      weight: 16,
+    });
+  }
+
+  const baseSlice = window.slice(touches[0], touches.at(-1)! + 1);
+  const halfPoint = Math.floor(baseSlice.length / 2);
+  const earlyVolume = average(baseSlice.slice(0, halfPoint).map((candle) => candle.volume));
+  const lateVolume = average(baseSlice.slice(halfPoint).map((candle) => candle.volume));
+  const contraction = earlyVolume ? clamp(1 - lateVolume / earlyVolume) : 0;
+  if (contraction >= 0.3) {
+    signals.push({
+      key: "volumeContraction",
+      label: bottom ? "Volume cạn dần trong nền" : "Volume cạn dần ở đỉnh",
+      detail: `Volume nửa sau của nền thấp hơn nửa đầu ${Math.round(contraction * 100)}% — ${bottom ? "người bán hết hàng để xả" : "người mua hết mặn mà"}.`,
+      weight: contraction >= 0.45 ? 15 : 11,
+    });
+  }
+
+  const trapStart = Math.max(touches[0], window.length - BASE_TRAP_LOOKBACK);
+  let trapPierce = 0;
+  for (let index = trapStart; index < window.length; index += 1) {
+    const candle = window[index];
+    const pierced = bottom ? candle.low < level * 0.9985 : candle.high > level * 1.0015;
+    const closedBack = bottom ? candle.close > level : candle.close < level;
+    if (!pierced || !closedBack) continue;
+    const pierce = bottom
+      ? ((level - candle.low) / level) * 100
+      : ((candle.high - level) / level) * 100;
+    if (pierce > trapPierce) trapPierce = pierce;
+  }
+  if (trapPierce > 0) {
+    signals.push({
+      key: bottom ? "failedBreakdown" : "failedBreakout",
+      label: bottom ? "Phá đáy giả rồi bật lại" : "Phá đỉnh giả rồi tụt lại",
+      detail: `Có nến ${bottom ? "thủng nền" : "vượt nền"} ${round(trapPierce, 2)}% nhưng đóng cửa lại ${bottom ? "trên" : "dưới"} vùng ${round(level, 6)} — bẫy ${bottom ? "giảm" : "tăng"}.`,
+      weight: 18,
+    });
+  }
+
+  const recentAtr = atrPercent(window.slice(-10), 8);
+  const baseAtr = atrPercent(baseSlice) || recentAtr;
+  const compression = baseAtr ? clamp(1 - recentAtr / baseAtr) : 0;
+  if (compression >= 0.3) {
+    signals.push({
+      key: "rangeCompression",
+      label: "Biên độ nến co lại",
+      detail: `Biên độ 10 nến gần nhất hẹp hơn cả nền ${Math.round(compression * 100)}% — giá đang nén, sắp bung.`,
+      weight: 12,
+    });
+  }
+
+  const extremeIndex = bottom ? lows.indexOf(windowLow) : highs.indexOf(windowHigh);
+  const barsSinceExtreme = window.length - 1 - extremeIndex;
+  if (barsSinceExtreme >= 12) {
+    signals.push({
+      key: bottom ? "noNewLow" : "noNewHigh",
+      label: bottom ? "Lâu rồi không tạo đáy mới" : "Lâu rồi không tạo đỉnh mới",
+      detail: `${barsSinceExtreme} nến ${frame} trôi qua kể từ ${bottom ? "đáy" : "đỉnh"} sâu nhất — đà ${bottom ? "giảm" : "tăng"} đã dừng.`,
+      weight: Math.min(12, 6 + Math.floor(barsSinceExtreme / 10) * 3),
+    });
+  }
+
+  const ema20 = ema(closes, 20);
+  if (bottom ? currentClose > ema20 : currentClose < ema20) {
+    signals.push({
+      key: bottom ? "emaReclaim" : "emaLoss",
+      label: bottom ? "Giá đã lấy lại EMA20" : "Giá đã mất EMA20",
+      detail: `Giá ${round(currentClose, 6)} ${bottom ? "trên" : "dưới"} EMA20 ${round(ema20, 6)}.`,
+      weight: 6,
+    });
+  }
+
+  const score = Math.round(clamp(
+    signals.reduce((sum, signal) => sum + signal.weight, 0),
+    0,
+    100,
+  ));
+  const stage = score >= BASE_PROBE_READY_SCORE
+    ? "Nền vững"
+    : score >= BASE_PROBE_FORMING_SCORE
+      ? "Đang tạo nền"
+      : "Mới chớm";
+  const invalidation = bottom
+    ? extreme * (1 - tolerance / 100)
+    : extreme * (1 + tolerance / 100);
+
+  return {
+    direction: kind,
+    frame,
+    score,
+    stage,
+    level: round(level, 8),
+    invalidation: round(invalidation, 8),
+    touches: touchCount,
+    spanBars,
+    headline: bottom ? "Đang dò đáy" : "Đang dò đỉnh",
+    detail: bottom
+      ? `Giá đã ${touchCount} lần rơi về vùng ${round(level, 6)} trong ${spanBars} nến ${frame} mà không thủng sâu hơn. Chờ giá bật lên khỏi nền để tính LONG; đóng cửa dưới ${round(invalidation, 6)} là hỏng kịch bản.`
+      : `Giá đã ${touchCount} lần lên tới vùng ${round(level, 6)} trong ${spanBars} nến ${frame} mà không vượt nổi. Chờ giá gãy khỏi nền để tính SHORT; đóng cửa trên ${round(invalidation, 6)} là hỏng kịch bản.`,
+    signals: signals.sort((left, right) => right.weight - left.weight),
+  };
+}
+
+const BASE_FRAME_RANK: Record<RsiDivergence["frame"], number> = { "15m": 0, "1h": 1, "4h": 2 };
+
+function collectBaseProbe(frames: Array<{ frame: RsiDivergence["frame"]; candles: Candle[] }>) {
+  const found = frames
+    .flatMap(({ frame, candles }) => (["bottom", "top"] as const)
+      .map((kind) => assessBaseProbe(candles, frame, kind)))
+    .filter((probe): probe is BaseProbe => probe !== null);
+  if (!found.length) return emptyBaseProbe;
+  return found.reduce((left, right) => {
+    const byScore = right.score - left.score;
+    if (byScore !== 0) return byScore > 0 ? right : left;
+    // Điểm bằng nhau thì tin khung lớn hơn.
+    return BASE_FRAME_RANK[right.frame] > BASE_FRAME_RANK[left.frame] ? right : left;
+  });
+}
+
 function atrPercent(candles: Candle[], period = 14) {
   if (candles.length < 2) return 0;
   const ranges = candles.slice(1).map((candle, index) => {
@@ -832,6 +1071,7 @@ function scoreCoin(input: {
     : bearishReversal!;
   const volumeAlerts = collectVolumeAlerts(frameData);
   const volumeVerdict = buildVolumeVerdict(volumeAlerts, orderBook.imbalance);
+  const baseProbe = collectBaseProbe(frameData);
   const momentum15m = rsi15m > 55 ? 1 : rsi15m < 45 ? -1 : 0;
   const momentum1h = rsi1h > 55 ? 1 : rsi1h < 45 ? -1 : 0;
   const momentumDirection = (momentum15m + momentum1h) / 2;
@@ -874,6 +1114,9 @@ function scoreCoin(input: {
   if (reversal.score > 0) {
     reasons.push(`Đảo chiều ${reversal.stage.toLowerCase()} (${reversal.score}/100): ${reversal.signals.map((item) => item.label).join(", ")}`);
   }
+  if (baseProbe.direction !== "none") {
+    reasons.push(`${baseProbe.headline} trên ${baseProbe.frame} (${baseProbe.score}/100): ${baseProbe.signals.map((item) => item.label).join(", ")}`);
+  }
   const hasOrderBookSignal = Math.abs(orderBook.imbalance) >= ORDER_BOOK_ALERT_THRESHOLD;
   if (volumeAlerts.length || hasOrderBookSignal) {
     reasons.push(`${volumeVerdict.headline}: ${volumeVerdict.detail}`);
@@ -903,6 +1146,7 @@ function scoreCoin(input: {
     volumeAlerts,
     volumeVerdict,
     orderBookImbalance: round(orderBook.imbalance, 1),
+    baseProbe,
     atrPercent: round(volatility, 2),
     volumeRatio: round(volumeRatio, 2),
     fundingRate,
@@ -973,6 +1217,15 @@ export async function GET(request: Request) {
         right.quoteVolume24h - left.quoteVolume24h,
       );
 
+    // Coin đang dò đáy/đỉnh thường đã thoát vùng RSI cực trị, nên lọc riêng trên toàn bộ coin quét được.
+    const probeItems = successfulItems
+      .filter((item) => item.baseProbe.direction !== "none" && item.baseProbe.score >= BASE_PROBE_MIN_SCORE)
+      .sort((left, right) =>
+        right.baseProbe.score - left.baseProbe.score ||
+        right.baseProbe.touches - left.baseProbe.touches ||
+        right.quoteVolume24h - left.quoteVolume24h,
+      );
+
     if (!successfulItems.length) throw new Error("Không có đủ dữ liệu để quét RSI watchlist.");
     const data: WatchlistResponse = {
       market,
@@ -987,6 +1240,10 @@ export async function GET(request: Request) {
       refreshIntervalMs: CACHE_TTL_MS,
       items,
       overboughtItems,
+      probeItems,
+      bottomProbeCount: probeItems.filter((item) => item.baseProbe.direction === "bottom").length,
+      topProbeCount: probeItems.filter((item) => item.baseProbe.direction === "top").length,
+      probeMethodology: "Không dùng ngưỡng RSI — quét cấu trúc giá 60 nến gần nhất trên cả 15m, 1h và 4h để tìm coin đang xây nền. Một vùng giá bị test lại từ 2 lần trở lên trong tối thiểu 6 nến, và phải nằm ở 35% dưới cùng của biên độ (dò đáy) hoặc 35% trên cùng (dò đỉnh) để loại nhiễu tích luỹ giữa range. Điểm 0-100 cộng dồn từ: số lần test lại vùng, đáy sau cao hơn đáy trước, volume cạn dần trong nền, phá nền giả rồi bật lại, biên độ nến co lại, lâu không tạo đáy/đỉnh mới, và giá lấy lại (hoặc đánh mất) EMA20. Mỗi thẻ ghi rõ mức giá làm hỏng kịch bản.",
       methodology: "Bắt buộc RSI(7) < 20 trên 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ lên khỏi đáy, nến đảo chiều, volume climax, lấy lại EMA20 và phá swing high; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá giảm mà lực bán yếu dần nghĩa là người bán đã đuối (canh LONG); giá tăng mà lực mua yếu dần nghĩa là nhịp tăng thiếu tiền (canh SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ.",
       overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ xuống khỏi đỉnh, nến đảo chiều, volume climax, mất EMA20 và phá swing low; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá tăng mà lực mua yếu dần nghĩa là hết người mua đuổi (canh SHORT); giá tăng cùng volume nghĩa là đà tăng còn thật (chưa nên SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ.",
     };

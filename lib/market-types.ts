@@ -126,6 +126,7 @@ export type WatchlistItem = {
   volumeAlerts: VolumeAlert[];
   volumeVerdict: VolumeVerdict;
   orderBookImbalance: number;
+  baseProbe: BaseProbe;
   atrPercent: number;
   volumeRatio: number;
   fundingRate: number | null;
@@ -142,6 +143,40 @@ export type RsiDivergence = {
   rsiGap: number;
   priceGapPercent: number;
   strength: number;
+};
+
+export type BaseProbeSignalKey =
+  | "levelRetest"
+  | "higherLows"
+  | "lowerHighs"
+  | "volumeContraction"
+  | "failedBreakdown"
+  | "failedBreakout"
+  | "rangeCompression"
+  | "noNewLow"
+  | "noNewHigh"
+  | "emaReclaim"
+  | "emaLoss";
+
+export type BaseProbeSignal = {
+  key: BaseProbeSignalKey;
+  label: string;
+  detail: string;
+  weight: number;
+};
+
+export type BaseProbe = {
+  direction: "bottom" | "top" | "none";
+  frame: "15m" | "1h" | "4h";
+  score: number;
+  stage: "Nền vững" | "Đang tạo nền" | "Mới chớm" | "Chưa có";
+  level: number;
+  invalidation: number;
+  touches: number;
+  spanBars: number;
+  headline: string;
+  detail: string;
+  signals: BaseProbeSignal[];
 };
 
 export type VolumeAlertKey =
@@ -211,6 +246,10 @@ export type WatchlistResponse = {
   refreshIntervalMs: number;
   items: WatchlistItem[];
   overboughtItems: WatchlistItem[];
+  probeItems: WatchlistItem[];
+  bottomProbeCount: number;
+  topProbeCount: number;
   methodology: string;
   overboughtMethodology: string;
+  probeMethodology: string;
 };

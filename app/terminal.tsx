@@ -32,7 +32,7 @@ import {
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import symbolCatalog from "../lib/binance-usdt-symbols.json";
-import type { AiExplanation, Candle, MarketAnalysis, MarketType, ReversalReadiness, VolumeAlert, VolumeVerdict, WatchlistResponse } from "../lib/market-types";
+import type { AiExplanation, BaseProbe, Candle, MarketAnalysis, MarketType, ReversalReadiness, VolumeAlert, VolumeVerdict, WatchlistResponse } from "../lib/market-types";
 
 const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
 const WATCHLIST_BATCH_COUNT = 14;
@@ -257,6 +257,32 @@ function ReversalMeter({ reversal }: { reversal: ReversalReadiness }) {
   );
 }
 
+function BaseProbeMeter({ probe }: { probe: BaseProbe }) {
+  if (!probe || probe.direction === "none" || !probe.signals.length) return null;
+  const bottom = probe.direction === "bottom";
+  const tone = probe.stage === "Nền vững" ? "ready" : probe.stage === "Đang tạo nền" ? "forming" : "weak";
+  return (
+    <span className={`watch-probe ${bottom ? "bottom" : "top"} ${tone}`}>
+      <span className="watch-probe-head">
+        {bottom ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+        <b>{probe.stage}</b>
+        <em>{probe.score}/100</em>
+      </span>
+      <span className="watch-probe-track">
+        <i style={{ width: `${Math.min(100, Math.max(4, probe.score))}%` }} />
+      </span>
+      <span className="watch-probe-level">
+        Vùng {formatPrice(probe.level)} · {probe.touches} lần test · hỏng nếu {bottom ? "thủng" : "vượt"} {formatPrice(probe.invalidation)}
+      </span>
+      <span className="watch-probe-tags">
+        {probe.signals.slice(0, 4).map((signal) => (
+          <em key={signal.key} title={signal.detail}>{signal.label}</em>
+        ))}
+      </span>
+    </span>
+  );
+}
+
 const ORDER_BOOK_BADGE_THRESHOLD = 10;
 
 function OrderBookBadge({ imbalance }: { imbalance: number }) {
@@ -421,6 +447,7 @@ export function MarketTerminal() {
         }
         const uniqueItems = new Map(batches.flatMap((batch) => batch.items).map((item) => [item.symbol, item]));
         const uniqueOverboughtItems = new Map(batches.flatMap((batch) => batch.overboughtItems ?? []).map((item) => [item.symbol, item]));
+        const uniqueProbeItems = new Map(batches.flatMap((batch) => batch.probeItems ?? []).map((item) => [item.symbol, item]));
         const first = batches[0];
         const universeSize = Math.max(...batches.map((batch) => batch.universeSize));
         const successfulScans = batches.reduce((total, batch) => total + batch.successfulScans, 0);
@@ -429,6 +456,12 @@ export function MarketTerminal() {
           (total, batch) => total + (batch.overboughtMatchedCount ?? batch.overboughtItems?.length ?? 0),
           0,
         );
+        const probeList = [...uniqueProbeItems.values()]
+          .sort((left, right) =>
+            right.baseProbe.score - left.baseProbe.score ||
+            right.baseProbe.touches - left.baseProbe.touches ||
+            right.quoteVolume24h - left.quoteVolume24h,
+          );
         setWatchlist({
           ...first,
           generatedAt: Math.max(...batches.map((batch) => batch.generatedAt)),
@@ -436,6 +469,8 @@ export function MarketTerminal() {
           successfulScans,
           matchedCount,
           overboughtMatchedCount,
+          bottomProbeCount: probeList.filter((item) => item.baseProbe.direction === "bottom").length,
+          topProbeCount: probeList.filter((item) => item.baseProbe.direction === "top").length,
           universeSize,
           batch: 0,
           batchCount: WATCHLIST_BATCH_COUNT,
@@ -456,6 +491,7 @@ export function MarketTerminal() {
               right.quoteVolume24h - left.quoteVolume24h,
             )
             .slice(0, 8),
+          probeItems: probeList.slice(0, 8),
         });
         if (batches.length < WATCHLIST_BATCH_COUNT) {
           setWatchlistError(`Đã quét ${successfulScans}/${universeSize} cặp; một phần dữ liệu Binance chưa phản hồi.`);
@@ -781,6 +817,67 @@ export function MarketTerminal() {
             )}
             <div className="watchlist-foot">
               <span><CircleDot size={11} /> {watchlist?.overboughtMethodology || "RSI(7) > 90 là bắt buộc; coin có phân kỳ giảm được gắn nhãn SHORT."} Tự quét lại mỗi 90 giây.</span>
+              {watchlistError && watchlist ? <em><AlertTriangle size={11} /> Dữ liệu cũ đang được giữ lại</em> : null}
+            </div>
+          </section>
+
+          <section className="watchlist-panel probe-panel panel">
+            <div className="panel-header watchlist-header">
+              <div className="watchlist-title">
+                <span className="watchlist-icon"><Layers3 size={17} /></span>
+                <div><span className="eyebrow">BASE PROBE SCANNER</span><h2>Coin đang dò đáy / dò đỉnh</h2></div>
+              </div>
+              <div className="watchlist-actions">
+                {watchlist
+                  ? <span>{watchlist.bottomProbeCount ?? 0} coin dò đáy · {watchlist.topProbeCount ?? 0} coin dò đỉnh · {formatTime(watchlist.generatedAt)}</span>
+                  : <span>Đang dò cấu trúc nền trong top 200 volume</span>}
+                <button
+                  type="button"
+                  aria-label="Quét lại danh sách coin đang tạo nền"
+                  onClick={() => setWatchlistKey((key) => key + 1)}
+                  disabled={watchlistLoading}
+                >
+                  <RefreshCw size={14} className={watchlistLoading ? "spinning" : ""} />
+                </button>
+              </div>
+            </div>
+            {watchlistError && !watchlist ? (
+              <div className="watchlist-error"><AlertTriangle size={15} /><span>{watchlistError}</span><button onClick={() => setWatchlistKey((key) => key + 1)}>Thử lại</button></div>
+            ) : watchlist && !(watchlist.probeItems ?? []).length ? (
+              <div className="watchlist-empty"><Layers3 size={18} /><span><b>Chưa có coin nào đang xây nền rõ ràng</b>Top 200 volume hiện không có cặp nào test lại cùng một vùng giá đủ số lần ở 15m, 1h hoặc 4h.</span></div>
+            ) : (
+              <div className={watchlistLoading ? "watchlist-cards loading" : "watchlist-cards"}>
+                {watchlist ? (watchlist.probeItems ?? []).slice(0, 6).map((item, index) => {
+                  const bottom = item.baseProbe.direction === "bottom";
+                  return (
+                    <button
+                      type="button"
+                      className={`watch-card ${bottom ? "positive" : "negative"} ${symbol === item.symbol ? "active" : ""}`}
+                      key={item.symbol}
+                      onClick={() => selectSymbol(item.symbol)}
+                      aria-label={`Phân tích ${item.ticker}, ${item.baseProbe.headline.toLowerCase()} trên khung ${item.baseProbe.frame}, điểm ${item.baseProbe.score} trên 100`}
+                    >
+                      <span className="watch-rank">#{index + 1}</span>
+                      <span className={`watch-signal ${bottom ? "positive" : "negative"}`}>
+                        {bottom
+                          ? <><TrendingUp size={12} /> DÒ ĐÁY · {item.baseProbe.frame}</>
+                          : <><TrendingDown size={12} /> DÒ ĐỈNH · {item.baseProbe.frame}</>}
+                      </span>
+                      <span className="watch-coin"><i>{item.ticker.slice(0, 1)}</i><b>{item.ticker}<small>/USDT</small></b></span>
+                      <span className="watch-score"><strong>{item.baseProbe.score}</strong><small>điểm nền</small></span>
+                      <span className="watch-price">{formatPrice(item.price)}<em className={item.change24h >= 0 ? "positive-text" : "negative-text"}>{item.change24h >= 0 ? "+" : ""}{item.change24h}%</em></span>
+                      <OrderBookBadge imbalance={item.orderBookImbalance} />
+                      <span className="watch-reason">{item.baseProbe.spanBars} nến {item.baseProbe.frame} · RSI(7) 15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</span>
+                      <BaseProbeMeter probe={item.baseProbe} />
+                      <VolumeAlerts alerts={item.volumeAlerts} verdict={item.volumeVerdict} limit={1} />
+                      <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
+                    </button>
+                  );
+                }) : Array.from({ length: 6 }, (_, index) => <div className="watch-card-skeleton" key={index} />)}
+              </div>
+            )}
+            <div className="watchlist-foot">
+              <span><CircleDot size={11} /> {watchlist?.probeMethodology || "Quét cấu trúc nền giá, không dùng ngưỡng RSI."} Tự quét lại mỗi 90 giây.</span>
               {watchlistError && watchlist ? <em><AlertTriangle size={11} /> Dữ liệu cũ đang được giữ lại</em> : null}
             </div>
           </section>
