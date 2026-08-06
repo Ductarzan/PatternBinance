@@ -39,6 +39,9 @@ const VOLUME_ALERT_FADE = 0.3;
 const VOLUME_ALERT_MIN_STRENGTH = 35;
 const VOLUME_ALERT_LIMIT = 3;
 const VOLUME_VERDICT_CONFLICT = 0.6;
+const DEPTH_LIMIT = 20;
+const ORDER_BOOK_LEVELS = 20;
+const ORDER_BOOK_ALERT_THRESHOLD = 20;
 const CACHE_TTL_MS = 90_000;
 
 const cache = new Map<string, { expires: number; data: WatchlistResponse }>();
@@ -97,6 +100,25 @@ async function fetchKlines(market: MarketType, symbol: string, interval: string,
     `${base}${path}?symbol=${symbol}&interval=${interval}&limit=${limit}`,
   );
   return rows.map(toCandle);
+}
+
+async function fetchDepth(market: MarketType, symbol: string) {
+  const futures = market === "futures";
+  const base = futures ? FUTURES_BASE : SPOT_BASE;
+  const path = futures ? "/fapi/v1/depth" : "/api/v3/depth";
+  return getJson<{ bids?: string[][]; asks?: string[][] }>(
+    `${base}${path}?symbol=${symbol}&limit=${DEPTH_LIMIT}`,
+  );
+}
+
+function orderBookImbalance(depth: { bids?: string[][]; asks?: string[][] }) {
+  const sumSide = (side: string[][] | undefined) => (side ?? [])
+    .slice(0, ORDER_BOOK_LEVELS)
+    .reduce((sum, [price, quantity]) => sum + Number(price) * Number(quantity), 0);
+  const bidValue = sumSide(depth.bids);
+  const askValue = sumSide(depth.asks);
+  const total = bidValue + askValue;
+  return { bidValue, askValue, imbalance: total ? ((bidValue - askValue) / total) * 100 : 0 };
 }
 
 async function getMarketSnapshot(market: MarketType) {
@@ -646,12 +668,36 @@ function volumeAlertBias(alerts: VolumeAlert[], kind: "bullish" | "bearish") {
     .reduce((sum, alert) => sum + alert.strength, 0);
 }
 
-function buildVolumeVerdict(alerts: VolumeAlert[]): VolumeVerdict {
+function orderBookNote(imbalance: number, bias: "bullish" | "bearish" | "mixed" | "none") {
+  if (Math.abs(imbalance) < ORDER_BOOK_ALERT_THRESHOLD) return null;
+  const bookBias: "bullish" | "bearish" = imbalance > 0 ? "bullish" : "bearish";
+  const side = bookBias === "bullish" ? "lệch mua" : "lệch bán";
+  const meaning = bookBias === "bullish" ? "có lệnh chờ đỡ giá phía dưới" : "có lệnh chờ chặn giá phía trên";
+  if (bias === "none" || bias === "mixed") {
+    return `Order book đang ${side} ${Math.round(Math.abs(imbalance))}% (${meaning}).`;
+  }
+  return bookBias === bias
+    ? `Order book cũng ${side} ${Math.round(Math.abs(imbalance))}%, cùng chiều với volume.`
+    : `Nhưng order book lại ${side} ${Math.round(Math.abs(imbalance))}%, trái chiều với volume — nên thận trọng hơn.`;
+}
+
+function buildVolumeVerdict(alerts: VolumeAlert[], orderBookImbalanceValue: number): VolumeVerdict {
   if (!alerts.length) {
+    if (Math.abs(orderBookImbalanceValue) >= ORDER_BOOK_ALERT_THRESHOLD) {
+      const bookBias: "bullish" | "bearish" = orderBookImbalanceValue > 0 ? "bullish" : "bearish";
+      const side = bookBias === "bullish" ? "lệch mua" : "lệch bán";
+      const meaning = bookBias === "bullish" ? "có lệnh chờ đỡ giá phía dưới" : "có lệnh chờ chặn giá phía trên";
+      return {
+        bias: bookBias,
+        headline: bookBias === "bullish" ? "Order book lệch mua" : "Order book lệch bán",
+        detail: `Sổ lệnh đang ${side} ${Math.round(Math.abs(orderBookImbalanceValue))}% (${meaning}). Volume chưa cho tín hiệu rõ ràng.`,
+        confidence: Math.abs(orderBookImbalanceValue) >= 40 ? "Vừa" : "Nhẹ",
+      };
+    }
     return {
       bias: "none",
-      headline: "Volume chưa nói gì",
-      detail: "Giá và volume đi cùng nhau, chưa có dấu hiệu lệch pha đáng chú ý.",
+      headline: "Chưa có tín hiệu",
+      detail: "Giá, volume và order book đang cân bằng, chưa có dấu hiệu lệch pha đáng chú ý.",
       confidence: "—",
     };
   }
@@ -674,10 +720,11 @@ function buildVolumeVerdict(alerts: VolumeAlert[]): VolumeVerdict {
 
   const leading = (bullishScore > bearishScore ? bullish : bearish)
     .reduce((left, right) => (right.strength > left.strength ? right : left));
+  const note = orderBookNote(orderBookImbalanceValue, leading.bias);
   return {
     bias: leading.bias,
     headline: leading.bias === "bullish" ? "Volume ủng hộ phe mua" : "Volume ủng hộ phe bán",
-    detail: `${leading.label} trên khung ${leading.frame}. ${leading.conclusion}.`,
+    detail: `${leading.label} trên khung ${leading.frame}. ${leading.conclusion}.${note ? ` ${note}` : ""}`,
     confidence: leading.strength >= 70 ? "Mạnh" : leading.strength >= 50 ? "Vừa" : "Nhẹ",
   };
 }
@@ -713,8 +760,10 @@ function scoreCoin(input: {
   candles4h: Candle[];
   ticker: Record<string, string>;
   fundingRate: number | null;
+  depth: { bids?: string[][]; asks?: string[][] };
 }): WatchlistItem {
-  const { symbol, candles15m, candles1h, candles4h, ticker, fundingRate } = input;
+  const { symbol, candles15m, candles1h, candles4h, ticker, fundingRate, depth } = input;
+  const orderBook = orderBookImbalance(depth);
   const currentPrice = Number(ticker.lastPrice) || candles15m.at(-1)!.close;
   const change24h = Number(ticker.priceChangePercent) || 0;
   const quoteVolume24h = Number(ticker.quoteVolume) || 0;
@@ -782,7 +831,7 @@ function scoreCoin(input: {
     }
     : bearishReversal!;
   const volumeAlerts = collectVolumeAlerts(frameData);
-  const volumeVerdict = buildVolumeVerdict(volumeAlerts);
+  const volumeVerdict = buildVolumeVerdict(volumeAlerts, orderBook.imbalance);
   const momentum15m = rsi15m > 55 ? 1 : rsi15m < 45 ? -1 : 0;
   const momentum1h = rsi1h > 55 ? 1 : rsi1h < 45 ? -1 : 0;
   const momentumDirection = (momentum15m + momentum1h) / 2;
@@ -825,7 +874,8 @@ function scoreCoin(input: {
   if (reversal.score > 0) {
     reasons.push(`Đảo chiều ${reversal.stage.toLowerCase()} (${reversal.score}/100): ${reversal.signals.map((item) => item.label).join(", ")}`);
   }
-  if (volumeAlerts.length) {
+  const hasOrderBookSignal = Math.abs(orderBook.imbalance) >= ORDER_BOOK_ALERT_THRESHOLD;
+  if (volumeAlerts.length || hasOrderBookSignal) {
     reasons.push(`${volumeVerdict.headline}: ${volumeVerdict.detail}`);
     volumeAlerts.forEach((alert) => {
       reasons.push(`${alert.frame} · ${alert.label} → ${alert.conclusion}`);
@@ -852,6 +902,7 @@ function scoreCoin(input: {
     reversal,
     volumeAlerts,
     volumeVerdict,
+    orderBookImbalance: round(orderBook.imbalance, 1),
     atrPercent: round(volatility, 2),
     volumeRatio: round(volumeRatio, 2),
     fundingRate,
@@ -881,10 +932,11 @@ export async function GET(request: Request) {
 
     const scans = await mapSettledWithConcurrency(batchTickers, SCAN_CONCURRENCY, async (ticker) => {
       const symbol = ticker.symbol;
-      const [candles15m, candles1h, candles4h] = await Promise.all([
+      const [candles15m, candles1h, candles4h, depth] = await Promise.all([
         fetchKlines(market, symbol, "15m", RSI_HISTORY_LIMIT),
         fetchKlines(market, symbol, "1h", RSI_HISTORY_LIMIT),
         fetchKlines(market, symbol, "4h", RSI_HISTORY_LIMIT),
+        fetchDepth(market, symbol),
       ]);
       return scoreCoin({
         symbol,
@@ -893,6 +945,7 @@ export async function GET(request: Request) {
         candles4h,
         ticker,
         fundingRate: futures ? fundingMap.get(symbol) ?? null : null,
+        depth,
       });
     });
 
@@ -934,8 +987,8 @@ export async function GET(request: Request) {
       refreshIntervalMs: CACHE_TTL_MS,
       items,
       overboughtItems,
-      methodology: "Bắt buộc RSI(7) < 20 trên 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ lên khỏi đáy, nến đảo chiều, volume climax, lấy lại EMA20 và phá swing high; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá giảm mà lực bán yếu dần nghĩa là người bán đã đuối (canh LONG); giá tăng mà lực mua yếu dần nghĩa là nhịp tăng thiếu tiền (canh SHORT). Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ.",
-      overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ xuống khỏi đỉnh, nến đảo chiều, volume climax, mất EMA20 và phá swing low; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá tăng mà lực mua yếu dần nghĩa là hết người mua đuổi (canh SHORT); giá tăng cùng volume nghĩa là đà tăng còn thật (chưa nên SHORT). Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ.",
+      methodology: "Bắt buộc RSI(7) < 20 trên 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ lên khỏi đáy, nến đảo chiều, volume climax, lấy lại EMA20 và phá swing high; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá giảm mà lực bán yếu dần nghĩa là người bán đã đuối (canh LONG); giá tăng mà lực mua yếu dần nghĩa là nhịp tăng thiếu tiền (canh SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ.",
+      overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ xuống khỏi đỉnh, nến đảo chiều, volume climax, mất EMA20 và phá swing low; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá tăng mà lực mua yếu dần nghĩa là hết người mua đuổi (canh SHORT); giá tăng cùng volume nghĩa là đà tăng còn thật (chưa nên SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {

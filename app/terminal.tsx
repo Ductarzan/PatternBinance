@@ -257,6 +257,23 @@ function ReversalMeter({ reversal }: { reversal: ReversalReadiness }) {
   );
 }
 
+const ORDER_BOOK_BADGE_THRESHOLD = 10;
+
+function OrderBookBadge({ imbalance }: { imbalance: number }) {
+  if (!Number.isFinite(imbalance) || Math.abs(imbalance) < ORDER_BOOK_BADGE_THRESHOLD) return null;
+  const buyLeaning = imbalance > 0;
+  return (
+    <span
+      className={`watch-book ${buyLeaning ? "bullish" : "bearish"}`}
+      title={buyLeaning
+        ? "Trong 20 mức giá gần nhất, tổng lệnh chờ mua lớn hơn lệnh chờ bán."
+        : "Trong 20 mức giá gần nhất, tổng lệnh chờ bán lớn hơn lệnh chờ mua."}
+    >
+      Sổ lệnh {buyLeaning ? "lệch mua" : "lệch bán"} {Math.round(Math.abs(imbalance))}%
+    </span>
+  );
+}
+
 function VolumeAlerts({
   alerts,
   verdict,
@@ -266,7 +283,7 @@ function VolumeAlerts({
   verdict: VolumeVerdict;
   limit?: number;
 }) {
-  if (!alerts?.length || !verdict || verdict.bias === "none") return null;
+  if (!verdict || verdict.bias === "none") return null;
   return (
     <span className="watch-alerts">
       <span className={`watch-verdict ${verdict.bias}`} title={verdict.detail}>
@@ -686,6 +703,7 @@ export function MarketTerminal() {
                       <span className="watch-coin"><i>{item.ticker.slice(0, 1)}</i><b>{item.ticker}<small>/USDT</small></b></span>
                       <span className="watch-score"><strong>{item.lowestRsi}</strong><small>RSI(7) thấp</small></span>
                       <span className="watch-price">{formatPrice(item.price)}<em className={item.change24h >= 0 ? "positive-text" : "negative-text"}>{item.change24h >= 0 ? "+" : ""}{item.change24h}%</em></span>
+                      <OrderBookBadge imbalance={item.orderBookImbalance} />
                       <span className="watch-reason">{divergence
                         ? <>Giá {formatPrice(divergence.previousPrice)} → {formatPrice(divergence.currentPrice)} · RSI {divergence.previousRsi} → {divergence.currentRsi}</>
                         : <>15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</>}</span>

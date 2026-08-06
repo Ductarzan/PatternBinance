@@ -125,6 +125,7 @@ export type WatchlistItem = {
   reversal: ReversalReadiness;
   volumeAlerts: VolumeAlert[];
   volumeVerdict: VolumeVerdict;
+  orderBookImbalance: number;
   atrPercent: number;
   volumeRatio: number;
   fundingRate: number | null;

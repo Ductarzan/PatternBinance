@@ -152,6 +152,9 @@ button { color: inherit; }
 .watch-score small { color: #596371; font: 500 7px var(--font-geist-mono); }
 .watch-price { margin-top: 11px; display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted-2); font: 600 9px var(--font-geist-mono); }
 .watch-price em { font: 600 8px var(--font-geist-mono); font-style: normal; }
+.watch-book { margin-top: 5px; align-self: flex-start; padding: 2px 5px; border-radius: 3px; font: 650 7px var(--font-geist-mono); }
+.watch-book.bullish { color: var(--green); background: rgba(19,199,132,.08); }
+.watch-book.bearish { color: var(--red); background: rgba(239,72,104,.08); }
 .watch-reason { height: 28px; margin-top: 9px; overflow: hidden; color: #717b89; font-size: 8px; line-height: 1.55; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .watch-reversal { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
 .watch-reversal-head { display: flex; align-items: center; gap: 5px; color: #7b8593; font: 650 7px var(--font-geist-mono); }
