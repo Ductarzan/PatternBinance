@@ -4,6 +4,8 @@ import type {
   BaseProbe,
   BaseProbeSignal,
   Candle,
+  EntryPlan,
+  EntryTrigger,
   MarketType,
   ReversalReadiness,
   ReversalSignal,
@@ -55,6 +57,19 @@ const BASE_PROBE_MIN_SCORE = 58;
 const DEPTH_LIMIT = 20;
 const ORDER_BOOK_LEVELS = 20;
 const ORDER_BOOK_ALERT_THRESHOLD = 20;
+// Khung 1m chỉ dùng để bấm giờ điểm vào, không dùng để lọc coin (xem probeMethodology).
+const ENTRY_HISTORY_LIMIT = 99;
+const ENTRY_EMA_PERIOD = 9;
+const ENTRY_STRUCTURE_BARS = 3;
+const ENTRY_SWING_BARS = 10;
+const ENTRY_VOLUME_BARS = 20;
+const ENTRY_VOLUME_RATIO = 1.2;
+const ENTRY_RSI_TURN = 2;
+const ENTRY_LATE_ATR = 1.8;
+// Stop sát hơn 1 ATR(1m) là nằm trong vùng nhiễu, vào bao nhiêu quét bấy nhiêu.
+const ENTRY_ATR_STOP = 1.2;
+const ENTRY_MIN_RISK = 0.2;
+const ENTRY_REWARD = 2;
 const CACHE_TTL_MS = 90_000;
 
 const cache = new Map<string, { expires: number; data: WatchlistResponse }>();
@@ -992,6 +1007,123 @@ function trend(candles: Candle[]) {
   return 0;
 }
 
+function buildEntryPlan(candles: Candle[], direction: "long" | "short"): EntryPlan | null {
+  if (candles.length < 42) return null;
+  const long = direction === "long";
+  // Nến cuối Binance trả về là nến đang chạy — chỉ số trên nó đổi liên tục trong phút và
+  // sẽ tự vẽ lại. Mọi điều kiện vì thế chốt trên nến đã đóng; chỉ giá vào lấy theo giá live.
+  const livePrice = candles.at(-1)!.close;
+  const closedCandles = candles.slice(0, -1);
+  const closes = closedCandles.map((candle) => candle.close);
+  const last = closedCandles.at(-1)!;
+  const price = last.close;
+  if (!price || !livePrice) return null;
+
+  const values = rsiSeries(closedCandles);
+  const currentRsi = values.at(-1) ?? 50;
+  const recentRsi = values.slice(-6);
+  const extremeRsi = long ? Math.min(...recentRsi) : Math.max(...recentRsi);
+  const rsiTurn = long ? currentRsi - extremeRsi : extremeRsi - currentRsi;
+
+  const ema9 = ema(closes, ENTRY_EMA_PERIOD);
+  const priorCloses = closes.slice(-4, -1);
+  const crossed = long
+    ? price > ema9 && Math.min(...priorCloses) <= ema9
+    : price < ema9 && Math.max(...priorCloses) >= ema9;
+
+  const structureWindow = closedCandles.slice(-ENTRY_STRUCTURE_BARS - 1, -1);
+  const structureLevel = long
+    ? Math.max(...structureWindow.map((candle) => candle.high))
+    : Math.min(...structureWindow.map((candle) => candle.low));
+  const brokeStructure = long ? price > structureLevel : price < structureLevel;
+
+  const baselineVolume = average(
+    closedCandles.slice(-ENTRY_VOLUME_BARS - 1, -1).map((candle) => candle.volume),
+  ) || 1;
+  const volumeRatio = last.volume / baselineVolume;
+
+  const triggers: EntryTrigger[] = [
+    {
+      key: "rsiTurn1m",
+      label: long ? "RSI(7) 1m bẻ lên khỏi đáy" : "RSI(7) 1m bẻ xuống khỏi đỉnh",
+      detail: `RSI 1m ${round(extremeRsi, 1)} → ${round(currentRsi, 1)}`,
+      met: rsiTurn >= ENTRY_RSI_TURN,
+    },
+    {
+      key: "emaCross1m",
+      label: long ? "Nến 1m lấy lại EMA9" : "Nến 1m đánh mất EMA9",
+      detail: `Giá ${round(price, 6)} · EMA9 1m ${round(ema9, 6)}`,
+      met: crossed,
+    },
+    {
+      key: "structureBreak1m",
+      label: long
+        ? `Vượt đỉnh ${ENTRY_STRUCTURE_BARS} nến 1m gần nhất`
+        : `Thủng đáy ${ENTRY_STRUCTURE_BARS} nến 1m gần nhất`,
+      detail: `Mốc cần phá ${round(structureLevel, 6)}`,
+      met: brokeStructure,
+    },
+    {
+      key: "volumeConfirm1m",
+      label: "Volume nến kích hoạt xác nhận",
+      detail: `Volume ${round(volumeRatio, 2)}× trung bình ${ENTRY_VOLUME_BARS} nến 1m`,
+      met: volumeRatio >= ENTRY_VOLUME_RATIO,
+    },
+  ];
+
+  const swingWindow = closedCandles.slice(-ENTRY_SWING_BARS);
+  const swing = long
+    ? Math.min(...swingWindow.map((candle) => candle.low))
+    : Math.max(...swingWindow.map((candle) => candle.high));
+  const volatility = Math.max(atrPercent(closedCandles), 0.05);
+  // Stop phải nằm ngoài cả swing gần nhất lẫn biên độ nhiễu 1 phút, lấy cái xa hơn.
+  const swingRisk = Math.abs((livePrice - swing) / livePrice) * 100;
+  const riskPercent = Math.max(swingRisk, volatility * ENTRY_ATR_STOP, ENTRY_MIN_RISK);
+  const stop = long
+    ? livePrice * (1 - riskPercent / 100)
+    : livePrice * (1 + riskPercent / 100);
+  const target = long
+    ? livePrice * (1 + (riskPercent * ENTRY_REWARD) / 100)
+    : livePrice * (1 - (riskPercent * ENTRY_REWARD) / 100);
+
+  // Chỉ tính là trễ khi mốc kích hoạt đã bị phá và giá còn chạy xa khỏi nó — tức là đuổi lệnh.
+  // Đo từ swing 10 nến sẽ luôn báo trễ vì bản thân swing đã rộng vài ATR.
+  const runFromTrigger = brokeStructure
+    ? Math.abs((livePrice - structureLevel) / livePrice) * 100
+    : 0;
+  const distanceAtr = runFromTrigger / volatility;
+  const late = brokeStructure && distanceAtr > ENTRY_LATE_ATR;
+  const metCount = triggers.filter((trigger) => trigger.met).length;
+  const readiness = Math.round((metCount / triggers.length) * 100);
+  const state: EntryPlan["state"] = late
+    ? "Trễ nhịp"
+    : metCount >= 3
+      ? "Vào được"
+      : metCount >= 1
+        ? "Chờ trigger 1m"
+        : "Chưa đủ điều kiện";
+  const missing = triggers.filter((trigger) => !trigger.met).map((trigger) => trigger.label);
+  const note = late
+    ? `Giá đã chạy ${round(distanceAtr, 1)}× ATR(1m) khỏi mốc kích hoạt ${round(structureLevel, 6)} — đuổi lệnh lúc này là mua đắt, chờ nhịp lùi về gần mốc.`
+    : metCount >= 3
+      ? `Đủ ${metCount}/4 điều kiện 1m. Stop ${long ? "dưới" : "trên"} ${round(stop, 6)}, tức rủi ro ${round(riskPercent, 2)}% mỗi lệnh.`
+      : `Còn thiếu: ${missing.join(", ")}.`;
+
+  return {
+    direction,
+    state,
+    readiness,
+    triggers,
+    entry: round(livePrice, 8),
+    stop: round(stop, 8),
+    target: round(target, 8),
+    riskPercent: round(riskPercent, 2),
+    rewardRisk: ENTRY_REWARD,
+    asOf: last.time + 60_000,
+    note,
+  };
+}
+
 function scoreCoin(input: {
   symbol: string;
   candles15m: Candle[];
@@ -1133,6 +1265,9 @@ function scoreCoin(input: {
     quoteVolume24h,
     score,
     signal,
+    // Khung 1m được gắn sau, chỉ cho những coin đã lọt vào danh sách.
+    rsi1m: null,
+    entryPlan: null,
     rsi15m: round(rsi15m, 1),
     rsi1h: round(rsi1h, 1),
     rsi4h: round(rsi4h, 1),
@@ -1227,6 +1362,42 @@ export async function GET(request: Request) {
       );
 
     if (!successfulItems.length) throw new Error("Không có đủ dữ liệu để quét RSI watchlist.");
+
+    // Chỉ tải nến 1m cho coin đã lọt danh sách — quét 1m cho cả 200 coin là lãng phí rate limit.
+    const timingTargets = new Map<string, "long" | "short">();
+    const register = (item: WatchlistItem, direction: "long" | "short") => {
+      if (!timingTargets.has(item.symbol)) timingTargets.set(item.symbol, direction);
+    };
+    items.forEach((item) => register(item, "long"));
+    overboughtItems.forEach((item) => register(item, "short"));
+    probeItems.forEach((item) => register(item, item.baseProbe.direction === "bottom" ? "long" : "short"));
+
+    const timingScans = await mapSettledWithConcurrency(
+      [...timingTargets.entries()],
+      SCAN_CONCURRENCY,
+      async ([symbol, direction]) => {
+        const candles1m = await fetchKlines(market, symbol, "1m", ENTRY_HISTORY_LIMIT);
+        return {
+          symbol,
+          rsi1m: round(rsi(candles1m), 1),
+          entryPlan: buildEntryPlan(candles1m, direction),
+        };
+      },
+    );
+    const timingMap = new Map(
+      timingScans
+        .filter((result): result is PromiseFulfilledResult<{
+          symbol: string;
+          rsi1m: number;
+          entryPlan: EntryPlan | null;
+        }> => result.status === "fulfilled")
+        .map((result) => [result.value.symbol, result.value]),
+    );
+    const withTiming = (item: WatchlistItem): WatchlistItem => {
+      const timing = timingMap.get(item.symbol);
+      return timing ? { ...item, rsi1m: timing.rsi1m, entryPlan: timing.entryPlan } : item;
+    };
+
     const data: WatchlistResponse = {
       market,
       generatedAt: snapshot.generatedAt,
@@ -1238,14 +1409,14 @@ export async function GET(request: Request) {
       batch,
       batchCount,
       refreshIntervalMs: CACHE_TTL_MS,
-      items,
-      overboughtItems,
-      probeItems,
+      items: items.map(withTiming),
+      overboughtItems: overboughtItems.map(withTiming),
+      probeItems: probeItems.map(withTiming),
       bottomProbeCount: probeItems.filter((item) => item.baseProbe.direction === "bottom").length,
       topProbeCount: probeItems.filter((item) => item.baseProbe.direction === "top").length,
-      probeMethodology: "Không dùng ngưỡng RSI — quét cấu trúc giá 60 nến gần nhất trên cả 15m, 1h và 4h để tìm coin đang xây nền. Một vùng giá bị test lại từ 2 lần trở lên trong tối thiểu 6 nến, và phải nằm ở 35% dưới cùng của biên độ (dò đáy) hoặc 35% trên cùng (dò đỉnh) để loại nhiễu tích luỹ giữa range. Điểm 0-100 cộng dồn từ: số lần test lại vùng, đáy sau cao hơn đáy trước, volume cạn dần trong nền, phá nền giả rồi bật lại, biên độ nến co lại, lâu không tạo đáy/đỉnh mới, và giá lấy lại (hoặc đánh mất) EMA20. Mỗi thẻ ghi rõ mức giá làm hỏng kịch bản.",
-      methodology: "Bắt buộc RSI(7) < 20 trên 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ lên khỏi đáy, nến đảo chiều, volume climax, lấy lại EMA20 và phá swing high; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá giảm mà lực bán yếu dần nghĩa là người bán đã đuối (canh LONG); giá tăng mà lực mua yếu dần nghĩa là nhịp tăng thiếu tiền (canh SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ.",
-      overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ xuống khỏi đỉnh, nến đảo chiều, volume climax, mất EMA20 và phá swing low; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá tăng mà lực mua yếu dần nghĩa là hết người mua đuổi (canh SHORT); giá tăng cùng volume nghĩa là đà tăng còn thật (chưa nên SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ.",
+      probeMethodology: "Không dùng ngưỡng RSI — quét cấu trúc giá 60 nến gần nhất trên cả 15m, 1h và 4h để tìm coin đang xây nền. Một vùng giá bị test lại từ 2 lần trở lên trong tối thiểu 6 nến, và phải nằm ở 35% dưới cùng của biên độ (dò đáy) hoặc 35% trên cùng (dò đỉnh) để loại nhiễu tích luỹ giữa range. Điểm 0-100 cộng dồn từ: số lần test lại vùng, đáy sau cao hơn đáy trước, volume cạn dần trong nền, phá nền giả rồi bật lại, biên độ nến co lại, lâu không tạo đáy/đỉnh mới, và giá lấy lại (hoặc đánh mất) EMA20. Mỗi thẻ ghi rõ mức giá làm hỏng kịch bản. Khung 1m gắn thêm bộ bấm giờ điểm vào với 4 điều kiện chốt trên nến đã đóng, kèm giá vào, stop và mục tiêu theo R:R 1:2.",
+      methodology: "Bắt buộc RSI(7) < 20 trên 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ lên khỏi đáy, nến đảo chiều, volume climax, lấy lại EMA20 và phá swing high; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá giảm mà lực bán yếu dần nghĩa là người bán đã đuối (canh LONG); giá tăng mà lực mua yếu dần nghĩa là nhịp tăng thiếu tiền (canh SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ. Khung 1m chỉ dùng để bấm giờ điểm vào chứ không dùng để lọc coin, và chỉ tải cho coin đã lọt danh sách: 4 điều kiện gồm RSI(7) 1m bẻ hướng, nến lấy lại hoặc đánh mất EMA9, phá đỉnh/đáy 3 nến gần nhất, và volume nến kích hoạt vượt trung bình 20 nến. Tất cả chốt trên nến 1m đã đóng để tín hiệu không tự vẽ lại; stop lấy mức xa hơn giữa swing 10 nến và 1.2× ATR(1m) để nằm ngoài vùng nhiễu.",
+      overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ xuống khỏi đỉnh, nến đảo chiều, volume climax, mất EMA20 và phá swing low; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá tăng mà lực mua yếu dần nghĩa là hết người mua đuổi (canh SHORT); giá tăng cùng volume nghĩa là đà tăng còn thật (chưa nên SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ. Khung 1m chỉ dùng để bấm giờ điểm vào chứ không dùng để lọc coin, và chỉ tải cho coin đã lọt danh sách: 4 điều kiện gồm RSI(7) 1m bẻ hướng, nến lấy lại hoặc đánh mất EMA9, phá đỉnh/đáy 3 nến gần nhất, và volume nến kích hoạt vượt trung bình 20 nến. Tất cả chốt trên nến 1m đã đóng để tín hiệu không tự vẽ lại; stop lấy mức xa hơn giữa swing 10 nến và 1.2× ATR(1m) để nằm ngoài vùng nhiễu.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {

@@ -113,6 +113,7 @@ export type WatchlistItem = {
   quoteVolume24h: number;
   score: number;
   signal: Signal;
+  rsi1m: number | null;
   rsi15m: number;
   rsi1h: number;
   rsi4h: number;
@@ -127,6 +128,7 @@ export type WatchlistItem = {
   volumeVerdict: VolumeVerdict;
   orderBookImbalance: number;
   baseProbe: BaseProbe;
+  entryPlan: EntryPlan | null;
   atrPercent: number;
   volumeRatio: number;
   fundingRate: number | null;
@@ -143,6 +145,33 @@ export type RsiDivergence = {
   rsiGap: number;
   priceGapPercent: number;
   strength: number;
+};
+
+export type EntryTriggerKey =
+  | "rsiTurn1m"
+  | "emaCross1m"
+  | "structureBreak1m"
+  | "volumeConfirm1m";
+
+export type EntryTrigger = {
+  key: EntryTriggerKey;
+  label: string;
+  detail: string;
+  met: boolean;
+};
+
+export type EntryPlan = {
+  direction: "long" | "short";
+  state: "Vào được" | "Chờ trigger 1m" | "Trễ nhịp" | "Chưa đủ điều kiện";
+  readiness: number;
+  triggers: EntryTrigger[];
+  entry: number;
+  stop: number;
+  target: number;
+  riskPercent: number;
+  rewardRisk: number;
+  asOf: number;
+  note: string;
 };
 
 export type BaseProbeSignalKey =

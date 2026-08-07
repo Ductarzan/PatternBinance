@@ -32,7 +32,7 @@ import {
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import symbolCatalog from "../lib/binance-usdt-symbols.json";
-import type { AiExplanation, BaseProbe, Candle, MarketAnalysis, MarketType, ReversalReadiness, VolumeAlert, VolumeVerdict, WatchlistResponse } from "../lib/market-types";
+import type { AiExplanation, BaseProbe, Candle, EntryPlan, MarketAnalysis, MarketType, ReversalReadiness, VolumeAlert, VolumeVerdict, WatchlistResponse } from "../lib/market-types";
 
 const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
 const WATCHLIST_BATCH_COUNT = 14;
@@ -279,6 +279,42 @@ function BaseProbeMeter({ probe }: { probe: BaseProbe }) {
           <em key={signal.key} title={signal.detail}>{signal.label}</em>
         ))}
       </span>
+    </span>
+  );
+}
+
+function EntryPlanPanel({ plan }: { plan: EntryPlan | null }) {
+  if (!plan) return null;
+  const tone = plan.state === "Vào được"
+    ? "ready"
+    : plan.state === "Chờ trigger 1m"
+      ? "waiting"
+      : plan.state === "Trễ nhịp"
+        ? "late"
+        : "idle";
+  return (
+    <span className={`watch-entry ${plan.direction} ${tone}`}>
+      <span className="watch-entry-head">
+        <Target size={11} />
+        <b>{plan.state}</b>
+        <em>{plan.triggers.filter((trigger) => trigger.met).length}/{plan.triggers.length} điều kiện 1m</em>
+      </span>
+      <span className="watch-entry-triggers">
+        {plan.triggers.map((trigger) => (
+          <span key={trigger.key} className={trigger.met ? "met" : "unmet"} title={trigger.detail}>
+            {trigger.met ? <Check size={8} /> : <CircleDot size={8} />}
+            {trigger.label}
+          </span>
+        ))}
+      </span>
+      <span className="watch-entry-levels">
+        <b>Vào {formatPrice(plan.entry)}</b>
+        <i>Stop {formatPrice(plan.stop)}</i>
+        <i>TP {formatPrice(plan.target)}</i>
+        <em>rủi ro {plan.riskPercent}% · R:R 1:{plan.rewardRisk}</em>
+      </span>
+      <span className="watch-entry-note">{plan.note}</span>
+      <span className="watch-entry-age">Chốt trên nến 1m đóng lúc {formatTime(plan.asOf)}</span>
     </span>
   );
 }
@@ -742,9 +778,10 @@ export function MarketTerminal() {
                       <OrderBookBadge imbalance={item.orderBookImbalance} />
                       <span className="watch-reason">{divergence
                         ? <>Giá {formatPrice(divergence.previousPrice)} → {formatPrice(divergence.currentPrice)} · RSI {divergence.previousRsi} → {divergence.currentRsi}</>
-                        : <>15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</>}</span>
+                        : <>{item.rsi1m === null ? null : <>1m {item.rsi1m} · </>}15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</>}</span>
                       <ReversalMeter reversal={item.reversal} />
                       <VolumeAlerts alerts={item.volumeAlerts} verdict={item.volumeVerdict} />
+                      <EntryPlanPanel plan={item.entryPlan} />
                       <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
                     </button>
                   );
@@ -806,9 +843,10 @@ export function MarketTerminal() {
                       <span className="watch-price">{formatPrice(item.price)}<em className={item.change24h >= 0 ? "positive-text" : "negative-text"}>{item.change24h >= 0 ? "+" : ""}{item.change24h}%</em></span>
                     <span className="watch-reason">{divergence
                       ? <>Giá {formatPrice(divergence.previousPrice)} → {formatPrice(divergence.currentPrice)} · RSI {divergence.previousRsi} → {divergence.currentRsi}</>
-                      : <>15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</>}</span>
+                      : <>{item.rsi1m === null ? null : <>1m {item.rsi1m} · </>}15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</>}</span>
                       <ReversalMeter reversal={item.reversal} />
                       <VolumeAlerts alerts={item.volumeAlerts} verdict={item.volumeVerdict} />
+                      <EntryPlanPanel plan={item.entryPlan} />
                       <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
                     </button>
                   );
@@ -867,9 +905,10 @@ export function MarketTerminal() {
                       <span className="watch-score"><strong>{item.baseProbe.score}</strong><small>điểm nền</small></span>
                       <span className="watch-price">{formatPrice(item.price)}<em className={item.change24h >= 0 ? "positive-text" : "negative-text"}>{item.change24h >= 0 ? "+" : ""}{item.change24h}%</em></span>
                       <OrderBookBadge imbalance={item.orderBookImbalance} />
-                      <span className="watch-reason">{item.baseProbe.spanBars} nến {item.baseProbe.frame} · RSI(7) 15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</span>
+                      <span className="watch-reason">{item.baseProbe.spanBars} nến {item.baseProbe.frame} · RSI(7) {item.rsi1m === null ? null : <>1m {item.rsi1m} · </>}15m {item.rsi15m} · 1h {item.rsi1h} · 4h {item.rsi4h}</span>
                       <BaseProbeMeter probe={item.baseProbe} />
                       <VolumeAlerts alerts={item.volumeAlerts} verdict={item.volumeVerdict} limit={1} />
+                      <EntryPlanPanel plan={item.entryPlan} />
                       <span className="watch-open">Phân tích sâu <ArrowRight size={12} /></span>
                     </button>
                   );
