@@ -77,9 +77,9 @@ export async function GET(request: Request) {
     const tickerPath = futures ? "/fapi/v1/ticker/24hr" : "/api/v3/ticker/24hr";
     const depthPath = futures ? "/fapi/v1/depth" : "/api/v3/depth";
 
-    const [main, candles5m, candles1h, candles4h, ticker, depth, funding] = await Promise.all([
+    const [main, candles1m, candles1h, candles4h, ticker, depth, funding] = await Promise.all([
       fetchKlines(market, symbol, "15m", 5000),
-      fetchKlines(market, symbol, "5m", 320),
+      fetchKlines(market, symbol, "1m", 320),
       fetchKlines(market, symbol, "1h", 320),
       fetchKlines(market, symbol, "4h", 320),
       getJson<Record<string, string>>(`${base}${tickerPath}?symbol=${symbol}`),
@@ -93,7 +93,7 @@ export async function GET(request: Request) {
       symbol,
       market,
       main,
-      timeframes: { "5m": candles5m, "1h": candles1h, "4h": candles4h },
+      timeframes: { "1m": candles1m, "1h": candles1h, "4h": candles4h },
       ticker,
       depth,
       funding,

@@ -92,7 +92,7 @@ function formatTime(value: number) {
   }).format(value);
 }
 
-function MarketChart({ candles }: { candles: Candle[] }) {
+function MarketChart({ candles, frameLabel }: { candles: Candle[]; frameLabel: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -198,9 +198,14 @@ function MarketChart({ candles }: { candles: Candle[] }) {
 
       const dateIndexes = [0, Math.floor(candles.length / 2), candles.length - 1];
       context.fillStyle = "#697383";
+      // Khung nhỏ thì 180 nến chỉ trải vài giờ, thiếu phút là ba nhãn trùng nhau.
+      const spacingMs = candles.length > 1 ? candles[1].time - candles[0].time : 0;
+      const timeFormat: Intl.DateTimeFormatOptions = spacingMs > 0 && spacingMs <= 15 * 60_000
+        ? { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }
+        : { day: "2-digit", month: "2-digit", hour: "2-digit" };
       dateIndexes.forEach((index, position) => {
         const candle = candles[index];
-        const label = new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", hour: "2-digit" }).format(candle.time);
+        const label = new Intl.DateTimeFormat("vi-VN", timeFormat).format(candle.time);
         const x = left + index * xStep;
         context.textAlign = position === 0 ? "left" : position === 2 ? "right" : "center";
         context.fillText(label, x, height - 2);
@@ -214,7 +219,7 @@ function MarketChart({ candles }: { candles: Candle[] }) {
     return () => observer.disconnect();
   }, [candles]);
 
-  return <canvas ref={canvasRef} className="market-canvas" aria-label="Biểu đồ nến 15 phút với EMA 20 và volume" />;
+  return <canvas ref={canvasRef} className="market-canvas" aria-label={`Biểu đồ nến ${frameLabel} với EMA 20 và volume`} />;
 }
 
 function LoadingTerminal({ symbol }: { symbol: string }) {
@@ -256,6 +261,14 @@ function ReversalMeter({ reversal }: { reversal: ReversalReadiness }) {
     </span>
   );
 }
+
+const CHART_FRAMES: TimeFrame[] = ["1m", "15m", "1h", "4h"];
+const CHART_FRAME_LABEL: Record<TimeFrame, string> = {
+  "1m": "1 phút",
+  "15m": "15 phút",
+  "1h": "1 giờ",
+  "4h": "4 giờ",
+};
 
 // Khớp với FRAME_WEIGHT phía API: coin chạm ngưỡng ở khung lớn xếp trên coin chỉ chạm ở 1m.
 const FRAME_WEIGHT: Record<TimeFrame, number> = { "1m": 1, "15m": 3, "1h": 5, "4h": 8 };
@@ -382,6 +395,7 @@ export function MarketTerminal() {
   const [symbol, setSymbol] = useState("BTCUSDT");
   const [searchOpen, setSearchOpen] = useState(false);
   const [market, setMarket] = useState<MarketType>("futures");
+  const [chartFrame, setChartFrame] = useState<TimeFrame>("15m");
   const [analysis, setAnalysis] = useState<MarketAnalysis | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistResponse | null>(null);
   const [ai, setAi] = useState<AiExplanation | null>(null);
@@ -951,12 +965,27 @@ export function MarketTerminal() {
             <div className="panel-header chart-header">
               <div>
                 <span className="eyebrow">PRICE ACTION</span>
-                <h2>Biểu đồ 15 phút</h2>
+                <h2>Biểu đồ {CHART_FRAME_LABEL[chartFrame]}</h2>
               </div>
               <div className="chart-legend"><span><i className="ema-dot" /> EMA 20</span><span><i className="volume-dot" /> Volume</span></div>
-              <div className="chart-tabs"><button>5m</button><button className="active">15m</button><button>1h</button><button>4h</button></div>
+              <div className="chart-tabs">
+                {CHART_FRAMES.map((frame) => (
+                  <button
+                    key={frame}
+                    type="button"
+                    className={frame === chartFrame ? "active" : ""}
+                    aria-pressed={frame === chartFrame}
+                    onClick={() => setChartFrame(frame)}
+                  >
+                    {frame}
+                  </button>
+                ))}
+              </div>
             </div>
-            <MarketChart candles={analysis.chartCandles} />
+            <MarketChart
+              candles={analysis.chartSeries?.[chartFrame] ?? analysis.chartCandles}
+              frameLabel={CHART_FRAME_LABEL[chartFrame]}
+            />
             <div className="chart-footer">
               <span><Database size={13} /> {analysis.candlesAnalyzed.toLocaleString("vi-VN")} nến đã xử lý</span>
               <span><Waves size={13} /> Pattern 30 nến</span>

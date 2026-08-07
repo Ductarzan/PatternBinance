@@ -88,6 +88,7 @@ export type MarketAnalysis = {
     askValue: number;
   };
   chartCandles: Candle[];
+  chartSeries: Record<TimeFrame, Candle[]>;
   factors: Array<{
     label: string;
     value: string;

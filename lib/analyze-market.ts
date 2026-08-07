@@ -109,7 +109,7 @@ function timeframeState(interval: string, candles: Candle[]): TimeframeState {
   const bearish = current < e20 && e20 < e50;
   return {
     interval,
-    label: interval === "5m" ? "5 phút" : interval === "15m" ? "15 phút" : interval === "1h" ? "1 giờ" : "4 giờ",
+    label: interval === "1m" ? "1 phút" : interval === "15m" ? "15 phút" : interval === "1h" ? "1 giờ" : "4 giờ",
     bias: bullish ? "Tăng" : bearish ? "Giảm" : "Trung tính",
     rsi: round(rsiValue, 1),
     ema20: round(e20, 8),
@@ -236,7 +236,7 @@ export function analyzeMarket(input: {
   const askValue = asks[0]?.total ?? 0;
   const imbalance = bidValue + askValue ? (bidValue - askValue) / (bidValue + askValue) : 0;
 
-  const states = ["5m", "15m", "1h", "4h"].map((interval) =>
+  const states = ["1m", "15m", "1h", "4h"].map((interval) =>
     timeframeState(interval, interval === "15m" ? main : timeframes[interval] ?? main),
   );
   const bullishFrames = states.filter((state) => state.bias === "Tăng").length;
@@ -342,6 +342,12 @@ export function analyzeMarket(input: {
     timeframes: states,
     orderBook: { bids, asks, bidValue, askValue },
     chartCandles: main.slice(-180),
+    chartSeries: {
+      "1m": (timeframes["1m"] ?? main).slice(-180),
+      "15m": main.slice(-180),
+      "1h": (timeframes["1h"] ?? main).slice(-180),
+      "4h": (timeframes["4h"] ?? main).slice(-180),
+    },
     factors: [
       { label: "Cấu trúc xu hướng", value: drivers[0], state: trendDirection === direction ? "positive" : "neutral" },
       { label: "Động lượng", value: drivers[1], state: momentumDirection === direction ? "positive" : momentumDirection === 0 ? "neutral" : "negative" },
