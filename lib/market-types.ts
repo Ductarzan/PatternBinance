@@ -1,4 +1,5 @@
 export type MarketType = "futures" | "spot";
+export type TimeFrame = "1m" | "15m" | "1h" | "4h";
 export type Signal = "LONG" | "SHORT" | "WAIT";
 
 export type Candle = {
@@ -113,14 +114,14 @@ export type WatchlistItem = {
   quoteVolume24h: number;
   score: number;
   signal: Signal;
-  rsi1m: number | null;
+  rsi1m: number;
   rsi15m: number;
   rsi1h: number;
   rsi4h: number;
   lowestRsi: number;
   highestRsi: number;
-  oversoldFrames: Array<"15m" | "1h" | "4h">;
-  overboughtFrames: Array<"15m" | "1h" | "4h">;
+  oversoldFrames: TimeFrame[];
+  overboughtFrames: TimeFrame[];
   bullishDivergences: RsiDivergence[];
   bearishDivergences: RsiDivergence[];
   reversal: ReversalReadiness;
@@ -136,7 +137,7 @@ export type WatchlistItem = {
 };
 
 export type RsiDivergence = {
-  frame: "15m" | "1h" | "4h";
+  frame: TimeFrame;
   previousPrice: number;
   currentPrice: number;
   previousRsi: number;
@@ -196,7 +197,7 @@ export type BaseProbeSignal = {
 
 export type BaseProbe = {
   direction: "bottom" | "top" | "none";
-  frame: "15m" | "1h" | "4h";
+  frame: TimeFrame;
   score: number;
   stage: "Nền vững" | "Đang tạo nền" | "Mới chớm" | "Chưa có";
   level: number;
@@ -218,7 +219,7 @@ export type VolumeAlertKey =
 
 export type VolumeAlert = {
   key: VolumeAlertKey;
-  frame: "15m" | "1h" | "4h";
+  frame: TimeFrame;
   bias: "bullish" | "bearish";
   action: "LONG" | "SHORT" | "WATCH";
   label: string;

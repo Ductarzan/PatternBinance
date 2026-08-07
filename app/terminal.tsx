@@ -32,7 +32,7 @@ import {
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import symbolCatalog from "../lib/binance-usdt-symbols.json";
-import type { AiExplanation, BaseProbe, Candle, EntryPlan, MarketAnalysis, MarketType, ReversalReadiness, VolumeAlert, VolumeVerdict, WatchlistResponse } from "../lib/market-types";
+import type { AiExplanation, BaseProbe, Candle, EntryPlan, MarketAnalysis, MarketType, ReversalReadiness, TimeFrame, VolumeAlert, VolumeVerdict, WatchlistResponse } from "../lib/market-types";
 
 const POPULAR_SYMBOLS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"];
 const WATCHLIST_BATCH_COUNT = 14;
@@ -256,6 +256,11 @@ function ReversalMeter({ reversal }: { reversal: ReversalReadiness }) {
     </span>
   );
 }
+
+// Khớp với FRAME_WEIGHT phía API: coin chạm ngưỡng ở khung lớn xếp trên coin chỉ chạm ở 1m.
+const FRAME_WEIGHT: Record<TimeFrame, number> = { "1m": 1, "15m": 3, "1h": 5, "4h": 8 };
+const frameWeight = (frames: TimeFrame[]) =>
+  frames.reduce((sum, frame) => sum + (FRAME_WEIGHT[frame] ?? 0), 0);
 
 function BaseProbeMeter({ probe }: { probe: BaseProbe }) {
   if (!probe || probe.direction === "none" || !probe.signals.length) return null;
@@ -513,16 +518,16 @@ export function MarketTerminal() {
           refreshIntervalMs: WATCHLIST_REFRESH_MS,
           items: [...uniqueItems.values()]
             .sort((left, right) =>
+              frameWeight(right.oversoldFrames) - frameWeight(left.oversoldFrames) ||
               right.bullishDivergences.length - left.bullishDivergences.length ||
-              right.oversoldFrames.length - left.oversoldFrames.length ||
               left.lowestRsi - right.lowestRsi ||
               right.quoteVolume24h - left.quoteVolume24h,
             )
             .slice(0, 8),
           overboughtItems: [...uniqueOverboughtItems.values()]
             .sort((left, right) =>
+              frameWeight(right.overboughtFrames) - frameWeight(left.overboughtFrames) ||
               right.bearishDivergences.length - left.bearishDivergences.length ||
-              right.overboughtFrames.length - left.overboughtFrames.length ||
               right.highestRsi - left.highestRsi ||
               right.quoteVolume24h - left.quoteVolume24h,
             )
@@ -750,7 +755,7 @@ export function MarketTerminal() {
             {watchlistError && !watchlist ? (
               <div className="watchlist-error"><AlertTriangle size={15} /><span>{watchlistError}</span><button onClick={() => setWatchlistKey((key) => key + 1)}>Thử lại</button></div>
             ) : watchlist && !watchlist.items.length ? (
-              <div className="watchlist-empty"><Gauge size={18} /><span><b>Chưa có coin RSI(7) dưới 20</b>Top 200 volume hiện không có cặp nào đạt ngưỡng ở khung 15m, 1h hoặc 4h.</span></div>
+              <div className="watchlist-empty"><Gauge size={18} /><span><b>Chưa có coin RSI(7) dưới 20</b>Top 200 volume hiện không có cặp nào đạt ngưỡng ở khung 1m, 15m, 1h hoặc 4h.</span></div>
             ) : (
               <div className={watchlistLoading ? "watchlist-cards loading" : "watchlist-cards"}>
                 {watchlist ? watchlist.items.slice(0, 6).map((item, index) => {
@@ -817,7 +822,7 @@ export function MarketTerminal() {
             {watchlistError && !watchlist ? (
               <div className="watchlist-error"><AlertTriangle size={15} /><span>{watchlistError}</span><button onClick={() => setWatchlistKey((key) => key + 1)}>Thử lại</button></div>
             ) : watchlist && !watchlist.overboughtItems.length ? (
-              <div className="watchlist-empty"><Gauge size={18} /><span><b>Chưa có coin RSI(7) trên 90</b>Top 200 volume hiện không có cặp nào đạt ngưỡng ở khung 15m, 1h hoặc 4h.</span></div>
+              <div className="watchlist-empty"><Gauge size={18} /><span><b>Chưa có coin RSI(7) trên 90</b>Top 200 volume hiện không có cặp nào đạt ngưỡng ở khung 1m, 15m, 1h hoặc 4h.</span></div>
             ) : (
               <div className={watchlistLoading ? "watchlist-cards loading" : "watchlist-cards"}>
                 {watchlist ? watchlist.overboughtItems.slice(0, 6).map((item, index) => {

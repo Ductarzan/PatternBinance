@@ -7,6 +7,7 @@ import type {
   EntryPlan,
   EntryTrigger,
   MarketType,
+  TimeFrame,
   ReversalReadiness,
   ReversalSignal,
   RsiDivergence,
@@ -690,6 +691,14 @@ function collectVolumeAlerts(frames: Array<{ frame: RsiDivergence["frame"]; cand
     .slice(0, VOLUME_ALERT_LIMIT);
 }
 
+// Một coin chạm ngưỡng trên 4h nặng ký hơn hẳn coin chỉ chạm trên 1m, nên xếp hạng theo
+// tổng trọng số khung thay vì đếm số khung. Nếu đếm suông, 1m sẽ áp đảo bảng.
+const FRAME_WEIGHT: Record<TimeFrame, number> = { "1m": 1, "15m": 3, "1h": 5, "4h": 8 };
+
+function frameWeight(frames: TimeFrame[]) {
+  return frames.reduce((sum, frame) => sum + FRAME_WEIGHT[frame], 0);
+}
+
 function volumeAlertBias(alerts: VolumeAlert[], kind: "bullish" | "bearish") {
   return alerts
     .filter((alert) => alert.bias === kind)
@@ -967,7 +976,7 @@ function assessBaseProbe(
   };
 }
 
-const BASE_FRAME_RANK: Record<RsiDivergence["frame"], number> = { "15m": 0, "1h": 1, "4h": 2 };
+const BASE_FRAME_RANK: Record<TimeFrame, number> = { "1m": 0, "15m": 1, "1h": 2, "4h": 3 };
 
 function collectBaseProbe(frames: Array<{ frame: RsiDivergence["frame"]; candles: Candle[] }>) {
   const found = frames
@@ -1126,6 +1135,7 @@ function buildEntryPlan(candles: Candle[], direction: "long" | "short"): EntryPl
 
 function scoreCoin(input: {
   symbol: string;
+  candles1m: Candle[];
   candles15m: Candle[];
   candles1h: Candle[];
   candles4h: Candle[];
@@ -1133,26 +1143,31 @@ function scoreCoin(input: {
   fundingRate: number | null;
   depth: { bids?: string[][]; asks?: string[][] };
 }): WatchlistItem {
-  const { symbol, candles15m, candles1h, candles4h, ticker, fundingRate, depth } = input;
+  const { symbol, candles1m, candles15m, candles1h, candles4h, ticker, fundingRate, depth } = input;
   const orderBook = orderBookImbalance(depth);
   const currentPrice = Number(ticker.lastPrice) || candles15m.at(-1)!.close;
   const change24h = Number(ticker.priceChangePercent) || 0;
   const quoteVolume24h = Number(ticker.quoteVolume) || 0;
   const trend15m = trend(candles15m);
   const trend1h = trend(candles1h);
+  const rsi1m = rsi(candles1m);
   const rsi15m = rsi(candles15m);
   const rsi1h = rsi(candles1h);
   const rsi4h = rsi(candles4h);
-  const rsiByFrame = { "15m": rsi15m, "1h": rsi1h, "4h": rsi4h };
+  const rsiByFrame = { "1m": rsi1m, "15m": rsi15m, "1h": rsi1h, "4h": rsi4h };
+  // 1m tham gia lọc RSI và phân kỳ, nhưng không tham gia dò nền và alert volume: ở khung này
+  // một cây nến nhiễu đã đủ tạo "nền" hay "cạn cung" giả.
   const frameData = [
+    { frame: "1m" as const, candles: candles1m },
     { frame: "15m" as const, candles: candles15m },
     { frame: "1h" as const, candles: candles1h },
     { frame: "4h" as const, candles: candles4h },
   ];
-  const oversoldFrames = (Object.entries(rsiByFrame) as Array<["15m" | "1h" | "4h", number]>)
+  const higherFrameData = frameData.filter(({ frame }) => frame !== "1m");
+  const oversoldFrames = (Object.entries(rsiByFrame) as Array<[TimeFrame, number]>)
     .filter(([, value]) => value < RSI_OVERSOLD_THRESHOLD)
     .map(([frame]) => frame);
-  const overboughtFrames = (Object.entries(rsiByFrame) as Array<["15m" | "1h" | "4h", number]>)
+  const overboughtFrames = (Object.entries(rsiByFrame) as Array<[TimeFrame, number]>)
     .filter(([, value]) => value > RSI_OVERBOUGHT_THRESHOLD)
     .map(([frame]) => frame);
   const bullishDivergences = frameData
@@ -1165,9 +1180,9 @@ function scoreCoin(input: {
       ? findRsiDivergence(candles, frame, "bearish")
       : null)
     .filter((item): item is RsiDivergence => item !== null);
-  const lowestRsi = Math.min(rsi15m, rsi1h, rsi4h);
-  const highestRsi = Math.max(rsi15m, rsi1h, rsi4h);
-  const candlesByFrame = { "15m": candles15m, "1h": candles1h, "4h": candles4h };
+  const lowestRsi = Math.min(rsi1m, rsi15m, rsi1h, rsi4h);
+  const highestRsi = Math.max(rsi1m, rsi15m, rsi1h, rsi4h);
+  const candlesByFrame = { "1m": candles1m, "15m": candles15m, "1h": candles1h, "4h": candles4h };
   const bullishFrame = oversoldFrames[0]
     ?? (bullishDivergences[0]?.frame)
     ?? (frameData.find(({ frame }) => rsiByFrame[frame] === lowestRsi)?.frame ?? "15m");
@@ -1201,9 +1216,9 @@ function scoreCoin(input: {
       volumeSpike: 0,
     }
     : bearishReversal!;
-  const volumeAlerts = collectVolumeAlerts(frameData);
+  const volumeAlerts = collectVolumeAlerts(higherFrameData);
   const volumeVerdict = buildVolumeVerdict(volumeAlerts, orderBook.imbalance);
-  const baseProbe = collectBaseProbe(frameData);
+  const baseProbe = collectBaseProbe(higherFrameData);
   const momentum15m = rsi15m > 55 ? 1 : rsi15m < 45 ? -1 : 0;
   const momentum1h = rsi1h > 55 ? 1 : rsi1h < 45 ? -1 : 0;
   const momentumDirection = (momentum15m + momentum1h) / 2;
@@ -1236,8 +1251,20 @@ function scoreCoin(input: {
     100,
   ));
 
+  // Hướng vào lệnh ưu tiên tín hiệu RSI cực trị, sau đó mới tới cấu trúc nền.
+  const entryDirection: "long" | "short" | null = oversoldFrames.length
+    ? "long"
+    : overboughtFrames.length
+      ? "short"
+      : baseProbe.direction === "bottom"
+        ? "long"
+        : baseProbe.direction === "top"
+          ? "short"
+          : null;
+  const entryPlan = entryDirection ? buildEntryPlan(candles1m, entryDirection) : null;
+
   const reasons: string[] = [
-    `RSI(7) 15m ${round(rsi15m, 1)} · 1h ${round(rsi1h, 1)} · 4h ${round(rsi4h, 1)}`,
+    `RSI(7) 1m ${round(rsi1m, 1)} · 15m ${round(rsi15m, 1)} · 1h ${round(rsi1h, 1)} · 4h ${round(rsi4h, 1)}`,
   ];
   if (aligned) reasons.push(`15m và 1h cùng xu hướng ${trend15m > 0 ? "tăng" : "giảm"}`);
   else if (trend15m || trend1h) reasons.push("Xu hướng đang hình thành, cần chờ thêm đồng thuận");
@@ -1265,9 +1292,8 @@ function scoreCoin(input: {
     quoteVolume24h,
     score,
     signal,
-    // Khung 1m được gắn sau, chỉ cho những coin đã lọt vào danh sách.
-    rsi1m: null,
-    entryPlan: null,
+    rsi1m: round(rsi1m, 1),
+    entryPlan,
     rsi15m: round(rsi15m, 1),
     rsi1h: round(rsi1h, 1),
     rsi4h: round(rsi4h, 1),
@@ -1311,7 +1337,8 @@ export async function GET(request: Request) {
 
     const scans = await mapSettledWithConcurrency(batchTickers, SCAN_CONCURRENCY, async (ticker) => {
       const symbol = ticker.symbol;
-      const [candles15m, candles1h, candles4h, depth] = await Promise.all([
+      const [candles1m, candles15m, candles1h, candles4h, depth] = await Promise.all([
+        fetchKlines(market, symbol, "1m", ENTRY_HISTORY_LIMIT),
         fetchKlines(market, symbol, "15m", RSI_HISTORY_LIMIT),
         fetchKlines(market, symbol, "1h", RSI_HISTORY_LIMIT),
         fetchKlines(market, symbol, "4h", RSI_HISTORY_LIMIT),
@@ -1319,6 +1346,7 @@ export async function GET(request: Request) {
       ]);
       return scoreCoin({
         symbol,
+        candles1m,
         candles15m,
         candles1h,
         candles4h,
@@ -1336,8 +1364,8 @@ export async function GET(request: Request) {
       .sort((left, right) =>
         right.reversal.score - left.reversal.score ||
         volumeAlertBias(right.volumeAlerts, "bullish") - volumeAlertBias(left.volumeAlerts, "bullish") ||
+        frameWeight(right.oversoldFrames) - frameWeight(left.oversoldFrames) ||
         right.bullishDivergences.length - left.bullishDivergences.length ||
-        right.oversoldFrames.length - left.oversoldFrames.length ||
         left.lowestRsi - right.lowestRsi ||
         right.quoteVolume24h - left.quoteVolume24h,
       );
@@ -1346,8 +1374,8 @@ export async function GET(request: Request) {
       .sort((left, right) =>
         right.reversal.score - left.reversal.score ||
         volumeAlertBias(right.volumeAlerts, "bearish") - volumeAlertBias(left.volumeAlerts, "bearish") ||
+        frameWeight(right.overboughtFrames) - frameWeight(left.overboughtFrames) ||
         right.bearishDivergences.length - left.bearishDivergences.length ||
-        right.overboughtFrames.length - left.overboughtFrames.length ||
         right.highestRsi - left.highestRsi ||
         right.quoteVolume24h - left.quoteVolume24h,
       );
@@ -1363,41 +1391,6 @@ export async function GET(request: Request) {
 
     if (!successfulItems.length) throw new Error("Không có đủ dữ liệu để quét RSI watchlist.");
 
-    // Chỉ tải nến 1m cho coin đã lọt danh sách — quét 1m cho cả 200 coin là lãng phí rate limit.
-    const timingTargets = new Map<string, "long" | "short">();
-    const register = (item: WatchlistItem, direction: "long" | "short") => {
-      if (!timingTargets.has(item.symbol)) timingTargets.set(item.symbol, direction);
-    };
-    items.forEach((item) => register(item, "long"));
-    overboughtItems.forEach((item) => register(item, "short"));
-    probeItems.forEach((item) => register(item, item.baseProbe.direction === "bottom" ? "long" : "short"));
-
-    const timingScans = await mapSettledWithConcurrency(
-      [...timingTargets.entries()],
-      SCAN_CONCURRENCY,
-      async ([symbol, direction]) => {
-        const candles1m = await fetchKlines(market, symbol, "1m", ENTRY_HISTORY_LIMIT);
-        return {
-          symbol,
-          rsi1m: round(rsi(candles1m), 1),
-          entryPlan: buildEntryPlan(candles1m, direction),
-        };
-      },
-    );
-    const timingMap = new Map(
-      timingScans
-        .filter((result): result is PromiseFulfilledResult<{
-          symbol: string;
-          rsi1m: number;
-          entryPlan: EntryPlan | null;
-        }> => result.status === "fulfilled")
-        .map((result) => [result.value.symbol, result.value]),
-    );
-    const withTiming = (item: WatchlistItem): WatchlistItem => {
-      const timing = timingMap.get(item.symbol);
-      return timing ? { ...item, rsi1m: timing.rsi1m, entryPlan: timing.entryPlan } : item;
-    };
-
     const data: WatchlistResponse = {
       market,
       generatedAt: snapshot.generatedAt,
@@ -1409,14 +1402,14 @@ export async function GET(request: Request) {
       batch,
       batchCount,
       refreshIntervalMs: CACHE_TTL_MS,
-      items: items.map(withTiming),
-      overboughtItems: overboughtItems.map(withTiming),
-      probeItems: probeItems.map(withTiming),
+      items,
+      overboughtItems,
+      probeItems,
       bottomProbeCount: probeItems.filter((item) => item.baseProbe.direction === "bottom").length,
       topProbeCount: probeItems.filter((item) => item.baseProbe.direction === "top").length,
       probeMethodology: "Không dùng ngưỡng RSI — quét cấu trúc giá 60 nến gần nhất trên cả 15m, 1h và 4h để tìm coin đang xây nền. Một vùng giá bị test lại từ 2 lần trở lên trong tối thiểu 6 nến, và phải nằm ở 35% dưới cùng của biên độ (dò đáy) hoặc 35% trên cùng (dò đỉnh) để loại nhiễu tích luỹ giữa range. Điểm 0-100 cộng dồn từ: số lần test lại vùng, đáy sau cao hơn đáy trước, volume cạn dần trong nền, phá nền giả rồi bật lại, biên độ nến co lại, lâu không tạo đáy/đỉnh mới, và giá lấy lại (hoặc đánh mất) EMA20. Mỗi thẻ ghi rõ mức giá làm hỏng kịch bản. Khung 1m gắn thêm bộ bấm giờ điểm vào với 4 điều kiện chốt trên nến đã đóng, kèm giá vào, stop và mục tiêu theo R:R 1:2.",
-      methodology: "Bắt buộc RSI(7) < 20 trên 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ lên khỏi đáy, nến đảo chiều, volume climax, lấy lại EMA20 và phá swing high; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá giảm mà lực bán yếu dần nghĩa là người bán đã đuối (canh LONG); giá tăng mà lực mua yếu dần nghĩa là nhịp tăng thiếu tiền (canh SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ. Khung 1m chỉ dùng để bấm giờ điểm vào chứ không dùng để lọc coin, và chỉ tải cho coin đã lọt danh sách: 4 điều kiện gồm RSI(7) 1m bẻ hướng, nến lấy lại hoặc đánh mất EMA9, phá đỉnh/đáy 3 nến gần nhất, và volume nến kích hoạt vượt trung bình 20 nến. Tất cả chốt trên nến 1m đã đóng để tín hiệu không tự vẽ lại; stop lấy mức xa hơn giữa swing 10 nến và 1.2× ATR(1m) để nằm ngoài vùng nhiễu.",
-      overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ xuống khỏi đỉnh, nến đảo chiều, volume climax, mất EMA20 và phá swing low; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá tăng mà lực mua yếu dần nghĩa là hết người mua đuổi (canh SHORT); giá tăng cùng volume nghĩa là đà tăng còn thật (chưa nên SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ. Khung 1m chỉ dùng để bấm giờ điểm vào chứ không dùng để lọc coin, và chỉ tải cho coin đã lọt danh sách: 4 điều kiện gồm RSI(7) 1m bẻ hướng, nến lấy lại hoặc đánh mất EMA9, phá đỉnh/đáy 3 nến gần nhất, và volume nến kích hoạt vượt trung bình 20 nến. Tất cả chốt trên nến 1m đã đóng để tín hiệu không tự vẽ lại; stop lấy mức xa hơn giữa swing 10 nến và 1.2× ATR(1m) để nằm ngoài vùng nhiễu.",
+      methodology: "Bắt buộc RSI(7) < 20 trên 1m, 15m, 1h hoặc 4h; gắn nhãn LONG phân kỳ tăng khi giá tạo đáy thấp hơn nhưng RSI tạo đáy cao hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ lên khỏi đáy, nến đảo chiều, volume climax, lấy lại EMA20 và phá swing high; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá giảm mà lực bán yếu dần nghĩa là người bán đã đuối (canh LONG); giá tăng mà lực mua yếu dần nghĩa là nhịp tăng thiếu tiền (canh SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ. Khung 1m vừa tham gia lọc RSI và phân kỳ, vừa là bộ bấm giờ điểm vào với 4 điều kiện gồm RSI(7) 1m bẻ hướng, nến lấy lại hoặc đánh mất EMA9, phá đỉnh/đáy 3 nến gần nhất, và volume nến kích hoạt vượt trung bình 20 nến. Tất cả chốt trên nến 1m đã đóng để tín hiệu không tự vẽ lại; stop lấy mức xa hơn giữa swing 10 nến và 1.2× ATR(1m) để nằm ngoài vùng nhiễu. Xếp hạng dùng trọng số khung (1m=1, 15m=3, 1h=5, 4h=8) nên coin chạm ngưỡng ở khung lớn luôn đứng trên coin chỉ chạm ở 1m; riêng dò nền và alert volume vẫn chỉ chạy trên 15m/1h/4h vì ở 1m một cây nến nhiễu đủ tạo tín hiệu giả.",
+      overboughtMethodology: "Bắt buộc RSI(7) > 90 trên 1m, 15m, 1h hoặc 4h; gắn nhãn SHORT phân kỳ giảm khi giá tạo đỉnh cao hơn nhưng RSI tạo đỉnh thấp hơn. Điểm đảo chiều 0-100 cộng dồn từ phân kỳ, RSI bẻ xuống khỏi đỉnh, nến đảo chiều, volume climax, mất EMA20 và phá swing low; bao gồm nến đang chạy. Phần alert đọc thêm volume của 6 nến gần nhất: giá tăng mà lực mua yếu dần nghĩa là hết người mua đuổi (canh SHORT); giá tăng cùng volume nghĩa là đà tăng còn thật (chưa nên SHORT). Order book (20 mức giá quanh giá hiện tại) được đối chiếu thêm: lệch mua/bán cùng chiều với volume thì tăng độ tin cậy, trái chiều thì cảnh báo thận trọng. Nếu các khung nói ngược nhau, thẻ sẽ báo mâu thuẫn và khuyên chờ. Khung 1m vừa tham gia lọc RSI và phân kỳ, vừa là bộ bấm giờ điểm vào với 4 điều kiện gồm RSI(7) 1m bẻ hướng, nến lấy lại hoặc đánh mất EMA9, phá đỉnh/đáy 3 nến gần nhất, và volume nến kích hoạt vượt trung bình 20 nến. Tất cả chốt trên nến 1m đã đóng để tín hiệu không tự vẽ lại; stop lấy mức xa hơn giữa swing 10 nến và 1.2× ATR(1m) để nằm ngoài vùng nhiễu. Xếp hạng dùng trọng số khung (1m=1, 15m=3, 1h=5, 4h=8) nên coin chạm ngưỡng ở khung lớn luôn đứng trên coin chỉ chạm ở 1m; riêng dò nền và alert volume vẫn chỉ chạy trên 15m/1h/4h vì ở 1m một cây nến nhiễu đủ tạo tín hiệu giả.",
     };
     cache.set(cacheKey, { expires: Date.now() + CACHE_TTL_MS, data });
     return NextResponse.json(data, {
